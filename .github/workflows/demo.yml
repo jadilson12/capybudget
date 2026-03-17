@@ -36,8 +36,6 @@ jobs:
 
       - name: Build demo
         run: npm run demo:build
-        env:
-          DEMO_BASE_PATH: /capybudget/
 
       - name: SPA fallback
         run: cp apps/demo/dist/index.html apps/demo/dist/404.html
