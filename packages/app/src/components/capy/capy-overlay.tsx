@@ -1,15 +1,20 @@
-import { useRef, useEffect, useState, type KeyboardEvent } from "react"
-import { RotateCcw, Send, Settings2, Sparkles, Square, X, Wrench } from "lucide-react"
+import { useRef, useEffect, useState, useCallback, type KeyboardEvent, type ChangeEvent, type DragEvent } from "react"
+import { File as FileIcon, Image, Paperclip, RotateCcw, Send, Settings2, Sparkles, Square, X, Wrench } from "lucide-react"
+import { toast } from "sonner"
 import { CommandPicker } from "./command-picker"
 import { InstructionsDialog } from "./instructions-dialog"
 import { getToolLabel } from "@/services/capy-stream"
 import type { CapyCommand } from "@/hooks/use-custom-commands"
-import type {
-  ChatMessage,
-  ContentBlock,
-  BarChartBlock,
-  DonutChartBlock,
-  TableBlock,
+import {
+  MAX_ATTACHMENT_SIZE,
+  MAX_TOTAL_ATTACHMENT_SIZE,
+  formatFileSize,
+  type FileAttachment,
+  type ChatMessage,
+  type ContentBlock,
+  type BarChartBlock,
+  type DonutChartBlock,
+  type TableBlock,
 } from "@capybudget/intelligence"
 
 interface CapyOverlayProps {
@@ -17,7 +22,7 @@ interface CapyOverlayProps {
   onClose: () => void
   messages: ChatMessage[]
   isStreaming: boolean
-  onSend: (text: string) => void
+  onSend: (text: string, files?: FileAttachment[]) => void
   onStop: () => void
   onNewChat: () => void
   instructions: string
@@ -40,9 +45,13 @@ export function CapyOverlay({
   onSaveCommands,
 }: CapyOverlayProps) {
   const [input, setInput] = useState("")
+  const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [instructionsOpen, setInstructionsOpen] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragCounterRef = useRef(0)
 
   useEffect(() => {
     if (open) {
@@ -57,11 +66,52 @@ export function CapyOverlay({
     }
   }, [messages])
 
+  const processFiles = useCallback(async (files: File[]) => {
+    // Phase 1: read files (no state dependency)
+    const candidates: FileAttachment[] = []
+    for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        toast.error(`${file.name} exceeds 5MB limit`)
+        continue
+      }
+      const isImage = file.type.startsWith("image/")
+      if (!isImage && !isTextFile(file)) {
+        toast.error(`${file.name} is not a supported file type`)
+        continue
+      }
+      const content = isImage ? await readFileAsBase64(file) : await file.text()
+      candidates.push({
+        name: file.name,
+        content,
+        size: file.size,
+        mediaType: file.type || "text/plain",
+      })
+    }
+
+    // Phase 2: validate totals against actual state (avoids stale closure)
+    if (candidates.length > 0) {
+      setAttachments((prev) => {
+        let runningTotal = prev.reduce((s, a) => s + a.size, 0)
+        const accepted: FileAttachment[] = []
+        for (const c of candidates) {
+          if (runningTotal + c.size > MAX_TOTAL_ATTACHMENT_SIZE) {
+            toast.error("Total attachment size exceeds 10MB")
+            break
+          }
+          accepted.push(c)
+          runningTotal += c.size
+        }
+        return accepted.length > 0 ? [...prev, ...accepted] : prev
+      })
+    }
+  }, [])
+
   const handleSend = () => {
     const text = input.trim()
-    if (!text || isStreaming) return
-    onSend(text)
+    if ((!text && attachments.length === 0) || isStreaming) return
+    onSend(text, attachments.length > 0 ? attachments : undefined)
     setInput("")
+    setAttachments([])
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -69,6 +119,40 @@ export function CapyOverlay({
       e.preventDefault()
       handleSend()
     }
+  }
+
+  const handleFileSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ""
+    await processFiles(files)
+  }
+
+  const handleDragEnter = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current++
+    if (dragCounterRef.current === 1) setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+    if (dragCounterRef.current === 0) setIsDragging(false)
+  }, [])
+
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault()
+  }, [])
+
+  const handleDrop = useCallback(async (e: DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    await processFiles(files)
+  }, [processFiles])
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index))
   }
 
   return (
@@ -85,12 +169,25 @@ export function CapyOverlay({
         onClick={onClose}
       />
 
-      {/* Chat column */}
+      {/* Chat column — drop zone */}
       <div
         className={`relative flex flex-1 flex-col mx-auto w-full max-w-3xl overflow-hidden transition-all duration-300 ease-out ${
           open ? "translate-y-0 scale-100" : "-translate-y-6 scale-[0.98]"
         }`}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       >
+        {/* Drop zone indicator */}
+        {isDragging && (
+          <div className="absolute inset-4 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-brand/50 bg-brand/5 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-2 text-brand">
+              <Paperclip className="h-6 w-6" />
+              <p className="text-sm font-medium">Drop files here</p>
+            </div>
+          </div>
+        )}
         {/* Overlay header */}
         <div className="flex items-center justify-between px-6 pt-16 pb-3">
           <div className="flex items-center gap-3">
@@ -170,7 +267,27 @@ export function CapyOverlay({
 
         {/* Input */}
         <div className="px-6 pb-8 pt-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileSelect}
+          />
           <div className="relative rounded-2xl border border-border/50 bg-card/80 shadow-2xl backdrop-blur-sm">
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-5 pt-3.5 pb-0">
+                {attachments.map((att, i) => (
+                  <FileChip
+                    key={i}
+                    name={att.name}
+                    size={att.size}
+                    mediaType={att.mediaType}
+                    onRemove={() => removeAttachment(i)}
+                  />
+                ))}
+              </div>
+            )}
             <textarea
               ref={inputRef}
               value={input}
@@ -178,8 +295,18 @@ export function CapyOverlay({
               onKeyDown={handleKeyDown}
               placeholder="Ask Capy anything about your finances..."
               rows={3}
-              className="w-full resize-none rounded-2xl bg-transparent px-5 py-4 pr-14 text-base text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+              className="w-full resize-none rounded-2xl bg-transparent px-5 py-4 pr-14 pl-12 text-base text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
             />
+            <div className="absolute left-3 bottom-3">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-xl p-2.5 text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                aria-label="Attach file"
+              >
+                <Paperclip className="h-4.5 w-4.5" />
+              </button>
+            </div>
             <div className="absolute right-3 bottom-3 flex items-center gap-1">
               {isStreaming && (
                 <button
@@ -194,7 +321,7 @@ export function CapyOverlay({
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={!input.trim() || isStreaming}
+                disabled={(!input.trim() && attachments.length === 0) || isStreaming}
                 className="rounded-xl p-2.5 text-brand hover:bg-brand/10 disabled:opacity-25 disabled:hover:bg-transparent transition-colors"
                 aria-label="Send message"
               >
@@ -282,7 +409,67 @@ function BlockRenderer({
       return <DonutChart title={block.title} data={block.data} />
     case "tool-activity":
       return <ToolActivity tool={block.tool} />
+    case "file-attachment":
+      return <FileChip name={block.name} size={block.size} mediaType={block.mediaType} />
   }
+}
+
+/* ── File Chip ────────────────────────────────────────────────── */
+
+function FileChip({
+  name,
+  size,
+  mediaType,
+  onRemove,
+}: {
+  name: string
+  size: number
+  mediaType: string
+  onRemove?: () => void
+}) {
+  const Icon = mediaType.startsWith("image/") ? Image : FileIcon
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg bg-brand/8 px-2.5 py-1 text-xs text-foreground/70">
+      <Icon className="h-3 w-3 text-muted-foreground" />
+      {name}
+      <span className="text-muted-foreground/50">
+        {formatFileSize(size)}
+      </span>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="ml-0.5 text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+          aria-label={`Remove ${name}`}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </span>
+  )
+}
+
+/* ── Helpers ──────────────────────────────────────────────────── */
+
+const TEXT_EXTENSIONS = new Set([".csv", ".tsv", ".json", ".xml", ".md", ".txt", ".log"])
+
+function isTextFile(file: File): boolean {
+  if (file.type.startsWith("text/")) return true
+  if (file.type === "application/json" || file.type === "application/xml") return true
+  const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
+  return TEXT_EXTENSIONS.has(ext)
+}
+
+function readFileAsBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      resolve(result.split(",")[1])
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 /* ── Tool Activity ────────────────────────────────────────────── */

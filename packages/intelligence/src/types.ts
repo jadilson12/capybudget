@@ -1,3 +1,23 @@
+// ── File attachment ──────────────────────────────────────────────
+
+export interface FileAttachment {
+  name: string
+  content: string
+  size: number
+  mediaType: string
+}
+
+// ── CLI message content (stream-json protocol) ──────────────────
+
+export type CliTextContent = { type: "text"; text: string }
+export type CliImageContent = {
+  type: "image"
+  source: { type: "base64"; media_type: string; data: string }
+}
+export type MessageContent =
+  | string
+  | Array<CliTextContent | CliImageContent>
+
 // ── Content block types (UI rendering) ──────────────────────────
 
 export type MessageRole = "user" | "assistant"
@@ -30,12 +50,20 @@ export interface ToolActivityBlock {
   tool: string
 }
 
+export interface FileAttachmentBlock {
+  type: "file-attachment"
+  name: string
+  size: number
+  mediaType: string
+}
+
 export type ContentBlock =
   | TextBlock
   | TableBlock
   | BarChartBlock
   | DonutChartBlock
   | ToolActivityBlock
+  | FileAttachmentBlock
 
 export interface ChatMessage {
   id: string
