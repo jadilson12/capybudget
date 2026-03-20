@@ -43,9 +43,11 @@ Transfer detection is a hard problem — the agent must identify matching pairs 
 
 An independent front-end module operating entirely on import files — no direct budget data dependency until merge.
 
-**Mapping section** at the top: lists new accounts and categories discovered during normalization. Each can be mapped to an existing budget entity or marked for creation.
+**Mapping section** at the top: lists new accounts and categories discovered during normalization. Each can be mapped to an existing budget entity or marked for creation. Unmapped sources default to "Create" — no gating on mapping completeness.
 
 **Transaction table** below: full CRUD, multi-select (unselect to ignore a transaction), search, inline editing. Same interaction patterns as the main transactions view — sorting, filtering, click-to-edit cells, bulk actions. User fixes errors, dates, amounts. Changes write back to the import file.
+
+**Aliases** are stored in `.capy/aliases.json` and survive across imports. When a new import begins, mappings are pre-populated from aliases — so returning users don't re-map the same accounts and categories every time. Aliases are persisted at merge time.
 
 ### 4. Enrichment (Magic Button)
 
@@ -55,15 +57,15 @@ The agent also resolves `sourceAccount` and `sourceCategory` strings to existing
 
 ### 5. Review & Merge
 
-User reviews enriched data, makes final corrections. **Merge** button enabled only when all account/category mappings are resolved.
+User reviews enriched data, makes final corrections.
 
-Merge pumps processed data into the budget database — creating mapped entities and bulk-inserting transactions.
+Merge pumps processed data into the budget database — creating mapped entities and bulk-inserting transactions. Unmapped sources are created as new entities.
 
 ## Import State
 
 Import is persistent — the user can leave the screen and return. A sidebar navigation item indicates when an import is in progress.
 
-Cancel resets to the file drop screen at any time, clearing `.capy/import/`.
+Cancel resets to the file drop screen at any time, clearing import data from `.capy/import/`. Aliases (`.capy/aliases.json`) are preserved across cancellations.
 
 ## Import Log
 
@@ -79,13 +81,23 @@ Merge clears the `.capy/import/` folder after writing the log entry.
 
 ## Intelligence Tools
 
-Provide MCP tools that make the agent's job easier and reduce context usage:
+### Import file tools
 
-- **Merchant search** — fuzzy search across existing merchants
-- **Transaction history search** — query historical records by merchant, amount, date range
-- **Category lookup** — find categories by name or spending patterns
+File operations scoped to `.capy/import/` — the agent reads and writes normalized data here:
 
-These are deterministic functions querying budget data. Offload as much matching work as possible from the intelligence layer into precise, composable tools.
+- `read_import_file` / `write_import_file` / `append_import_file` — CRUD for import staging files
+- `list_import_files` — directory listing
+
+### Budget query tools
+
+Deterministic functions querying budget data, available during both normalization and enrichment:
+
+- `list_accounts` — all accounts with balances
+- `list_categories` — all categories grouped
+- `list_transactions` — filterable by account, merchant substring, date range
+- `spending_summary` — totals by category for a date range
+
+Offload as much matching work as possible from the intelligence layer into precise, composable tools.
 
 ## Custom Instructions
 
