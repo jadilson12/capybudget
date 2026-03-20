@@ -124,7 +124,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
     budgetName,
     mcpServerPath: "packages/mcp/src/server.ts",
     customInstructions: customInstructions.instructions,
-    onNormalizationComplete: checkDisk,
+    onImportComplete: checkDisk,
   });
 
   const isProcessing = importSession.isStreaming;
@@ -399,7 +399,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
           )}
 
           {/* ── Preview area ───────────────────────────────── */}
-          {showPreview && <ImportPreview budgetPath={budgetPath} />}
+          {showPreview && <ImportPreview budgetPath={budgetPath} budgetName={budgetName} />}
 
         </div>
       </div>

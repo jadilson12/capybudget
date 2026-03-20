@@ -9,6 +9,10 @@ export interface ImportTransaction {
   sourceAccount: string;
   sourceCategory: string;
   memo: string;
+  merchant: string; // cleaned merchant name
+  accountId: string; // budget account UUID (AI guess, may be empty)
+  categoryId: string; // budget category UUID (AI guess, may be empty)
+  categoryConfidence: string; // "high" | "low" | ""
 }
 
 export type ImportPhase =

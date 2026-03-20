@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { useAccounts, useCategories } from "@/hooks/use-budget-data";
 import { useImportPaths } from "@/hooks/use-import-paths";
+import { useEnrichSession } from "@/hooks/use-enrich-session";
+import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { parseCsv, unparseCsv } from "@capybudget/persistence";
 import { formatMoney } from "@capybudget/core";
 import type { ImportTransaction } from "@capybudget/core";
@@ -22,21 +24,21 @@ import {
   type ImportSortConfig,
 } from "./import-table";
 import { ImportMapping, type EntityMapping } from "./import-mapping";
-import { Search, X, FileUp, Sparkles, Loader2, GitMerge } from "lucide-react";
+import { Search, X, FileUp, Sparkles, Loader2, GitMerge, AlertTriangle } from "lucide-react";
 
 const IMPORT_COERCE = { amount: (v: string) => parseInt(v, 10) };
 
 /** Stored in .capy/aliases.json — survives across imports. */
 interface ImportAliases {
   accounts: Record<string, string>; // sourceString → accountId | "__create__"
-  categories: Record<string, string>; // sourceString → categoryId | "__create__"
 }
 
 interface ImportPreviewProps {
   budgetPath: string;
+  budgetName: string;
 }
 
-export function ImportPreview({ budgetPath }: ImportPreviewProps) {
+export function ImportPreview({ budgetPath, budgetName }: ImportPreviewProps) {
   const [transactions, setTransactions] = useState<ImportTransaction[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<ImportSortConfig>({
@@ -45,7 +47,6 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
   });
   const [search, setSearch] = useState("");
   const [accountMapping, setAccountMapping] = useState<EntityMapping>({});
-  const [categoryMapping, setCategoryMapping] = useState<EntityMapping>({});
   const [loading, setLoading] = useState(true);
 
   const { data: accounts = [] } = useAccounts();
@@ -57,6 +58,29 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
 
   const { resolveImportPath, resolveAliasPath } = useImportPaths(budgetPath);
+  const customInstructions = useCustomInstructions(budgetPath);
+
+  // ── Load / reload CSV ──────────────────────────────────────────
+  const loadCsv = useCallback(async () => {
+    try {
+      const csvPath = await resolveImportPath("transactions.csv");
+      const content = await readTextFile(csvPath);
+      const parsed = parseCsv<ImportTransaction>(content, IMPORT_COERCE).map(
+        (t) => ({
+          ...t,
+          merchant: t.merchant || "",
+          accountId: t.accountId || "",
+          categoryId: t.categoryId || "",
+          categoryConfidence: t.categoryConfidence || "",
+        }),
+      );
+      setTransactions(parsed);
+      setSelectedIds(new Set(parsed.map((t) => t.id)));
+      setLoading(false);
+    } catch {
+      setLoading(false);
+    }
+  }, [resolveImportPath]);
 
   const writeBack = useCallback(async () => {
     try {
@@ -73,81 +97,114 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
     writeTimerRef.current = setTimeout(writeBack, 500);
   }, [writeBack]);
 
-  // Load CSV on mount (runs once)
+  // ── Re-enrichment session ──────────────────────────────────────
+  const enrichSession = useEnrichSession({
+    budgetPath,
+    budgetName,
+    mcpServerPath: "packages/mcp/src/server.ts",
+    customInstructions: customInstructions.instructions,
+    onEnrichmentComplete: loadCsv,
+  });
+
+  const handleEnrich = useCallback(async () => {
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current);
+      await writeBack();
+    }
+    enrichSession.startEnrichment();
+  }, [writeBack, enrichSession]);
+
+  // Auto-enrich: trigger enrichment once after first load if data hasn't been enriched yet
+  const autoEnrichTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (
+      autoEnrichTriggeredRef.current ||
+      loading ||
+      transactions.length === 0 ||
+      enrichSession.isEnriching
+    ) return;
+    // Check if any merchant is set — if none, enrichment hasn't run
+    const needsEnrich = transactions.every((t) => !t.merchant);
+    if (needsEnrich) {
+      autoEnrichTriggeredRef.current = true;
+      enrichSession.startEnrichment();
+    }
+  }, [loading, transactions, enrichSession]);
+
+  // Load CSV on mount
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      try {
-        const csvPath = await resolveImportPath("transactions.csv");
-        const content = await readTextFile(csvPath);
-        const parsed = parseCsv<ImportTransaction>(content, IMPORT_COERCE);
-        if (!cancelled) {
-          setTransactions(parsed);
-          setSelectedIds(new Set(parsed.map((t) => t.id)));
-          setLoading(false);
-        }
-      } catch {
-        if (!cancelled) setLoading(false);
-      }
+      await loadCsv();
+      if (cancelled) return;
     }
     load();
     return () => { cancelled = true; };
-  }, [resolveImportPath]);
+  }, [loadCsv]);
 
-  // Pre-populate mappings from aliases (runs when budget data is ready)
+  // ── Derive account mapping from CSV + aliases ──────────────────
   const aliasesAppliedRef = useRef(false);
   useEffect(() => {
-    // Wait until both transactions and budget data are loaded, apply once
-    if (aliasesAppliedRef.current || transactions.length === 0 || accounts.length === 0) return;
+    if (aliasesAppliedRef.current || transactions.length === 0 || accounts.length === 0 || categories.length === 0) return;
     aliasesAppliedRef.current = true;
 
-    async function applyAliases() {
+    async function applyMappings() {
+      const accountIds = new Set(accounts.map((a) => a.id));
+      const categoryIds = new Set(categories.map((c) => c.id));
+
+      // 1. Derive initial account mapping from AI-set accountId values
+      const aiMapping: EntityMapping = {};
+      for (const txn of transactions) {
+        if (txn.sourceAccount && !aiMapping[txn.sourceAccount] && txn.accountId) {
+          if (accountIds.has(txn.accountId)) {
+            aiMapping[txn.sourceAccount] = txn.accountId;
+          }
+        }
+      }
+
+      // 2. Validate categoryIds — clear invalid ones
+      let needsCategoryFix = false;
+      const validated = transactions.map((t) => {
+        if (t.categoryId && !categoryIds.has(t.categoryId)) {
+          needsCategoryFix = true;
+          return { ...t, categoryId: "", categoryConfidence: "" };
+        }
+        return t;
+      });
+      if (needsCategoryFix) {
+        setTransactions(validated);
+        scheduleWriteBack();
+      }
+
+      // 3. Overlay aliases (user's past mappings override AI)
+      const aliasMapping: EntityMapping = {};
       try {
         const aliasPath = await resolveAliasPath();
         const content = await readTextFile(aliasPath);
         const aliases: ImportAliases = JSON.parse(content);
 
         const importAccounts = new Set(transactions.map((t) => t.sourceAccount).filter(Boolean));
-        const importCategories = new Set(transactions.map((t) => t.sourceCategory).filter(Boolean));
-
-        const accountIds = new Set(accounts.map((a) => a.id));
-        const categoryIds = new Set(categories.map((c) => c.id));
-
-        const validAccounts: EntityMapping = {};
         if (aliases.accounts && typeof aliases.accounts === "object") {
           for (const [source, targetId] of Object.entries(aliases.accounts)) {
             if (!importAccounts.has(source)) continue;
             if (targetId === "__create__" || accountIds.has(targetId)) {
-              validAccounts[source] = targetId;
+              aliasMapping[source] = targetId;
             }
           }
-        }
-
-        const validCategories: EntityMapping = {};
-        if (aliases.categories && typeof aliases.categories === "object") {
-          for (const [source, targetId] of Object.entries(aliases.categories)) {
-            if (!importCategories.has(source)) continue;
-            if (targetId === "__create__" || categoryIds.has(targetId)) {
-              validCategories[source] = targetId;
-            }
-          }
-        }
-
-        if (Object.keys(validAccounts).length > 0) {
-          console.log("[import] pre-populated account mappings:", validAccounts);
-          setAccountMapping(validAccounts);
-        }
-        if (Object.keys(validCategories).length > 0) {
-          console.log("[import] pre-populated category mappings:", validCategories);
-          setCategoryMapping(validCategories);
         }
       } catch {
-        // No aliases file — user maps manually
+        // No aliases file
+      }
+
+      // Merge: aliases override AI suggestions
+      const merged = { ...aiMapping, ...aliasMapping };
+      if (Object.keys(merged).length > 0) {
+        setAccountMapping(merged);
       }
     }
 
-    applyAliases();
-  }, [transactions, accounts, categories, resolveAliasPath]);
+    applyMappings();
+  }, [transactions, accounts, categories, resolveAliasPath, scheduleWriteBack]);
 
   // Flush pending CSV write on unmount
   useEffect(() => {
@@ -159,18 +216,11 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
     };
   }, [writeBack]);
 
-  // Derived data
+  // ── Derived data ───────────────────────────────────────────────
   const sourceAccounts = useMemo(
     () =>
       [
         ...new Set(transactions.map((t) => t.sourceAccount).filter(Boolean)),
-      ].sort(),
-    [transactions],
-  );
-  const sourceCategories = useMemo(
-    () =>
-      [
-        ...new Set(transactions.map((t) => t.sourceCategory).filter(Boolean)),
       ].sort(),
     [transactions],
   );
@@ -182,6 +232,16 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
   const sorted = useMemo(
     () => sortImportTransactions(filtered, sort),
     [filtered, sort],
+  );
+
+  // Issues counts
+  const uncategorizedCount = useMemo(
+    () => transactions.filter((t) => !t.categoryId && t.type !== "transfer").length,
+    [transactions],
+  );
+  const lowConfidenceCount = useMemo(
+    () => transactions.filter((t) => t.categoryConfidence === "low").length,
+    [transactions],
   );
 
   // Selection helpers
@@ -196,7 +256,6 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
     (id: string, shiftKey: boolean) => {
       setSelectedIds((prev) => {
         const next = new Set(prev);
-
         if (shiftKey && lastToggledRef.current) {
           const ids = sorted.map((t) => t.id);
           const from = ids.indexOf(lastToggledRef.current);
@@ -213,7 +272,6 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
           if (next.has(id)) next.delete(id);
           else next.add(id);
         }
-
         lastToggledRef.current = id;
         return next;
       });
@@ -245,6 +303,24 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
     [scheduleWriteBack],
   );
 
+  // Account mapping change → batch-update accountId on all matching rows
+  const handleAccountMappingChange = useCallback(
+    (newMapping: EntityMapping) => {
+      setAccountMapping(newMapping);
+      setTransactions((prev) =>
+        prev.map((t) => {
+          if (!t.sourceAccount) return t;
+          const mappedId = newMapping[t.sourceAccount];
+          const newAccountId = mappedId && mappedId !== "__create__" ? mappedId : "";
+          if (t.accountId === newAccountId) return t;
+          return { ...t, accountId: newAccountId };
+        }),
+      );
+      scheduleWriteBack();
+    },
+    [scheduleWriteBack],
+  );
+
   // Stats
   const selected = transactions.filter((t) => selectedIds.has(t.id));
   const selectedCount = selected.length;
@@ -254,12 +330,8 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
   // Merge confirmation
   const [showMergeDialog, setShowMergeDialog] = useState(false);
 
-  // Count how many new entities will be created
   const newAccountCount = sourceAccounts.filter(
     (s) => !accountMapping[s] || accountMapping[s] === "__create__",
-  ).length;
-  const newCategoryCount = sourceCategories.filter(
-    (s) => !categoryMapping[s] || categoryMapping[s] === "__create__",
   ).length;
 
   if (loading) {
@@ -278,8 +350,8 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
           No transactions found
         </p>
         <p className="mt-1.5 text-sm text-muted-foreground/60">
-          The normalization didn't produce any transactions. Cancel the import
-          to start over.
+          The import didn't produce any transactions. Cancel the import to start
+          over.
         </p>
       </div>
     );
@@ -298,16 +370,27 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
         </p>
       </div>
 
-      {/* Mapping section */}
+      {/* Enriching indicator */}
+      {enrichSession.isEnriching && (
+        <div className="rounded-lg border border-brand/20 bg-brand/5 px-3.5 py-2 text-sm text-foreground/70 space-y-1">
+          <div className="flex items-center gap-2.5">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-brand shrink-0" />
+            <span>Enriching — identifying merchants and categories…</span>
+          </div>
+          {enrichSession.statusText && (
+            <p className="text-xs text-muted-foreground/60 truncate pl-6">
+              {enrichSession.statusText}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Account mapping section (hidden during enrichment to reduce noise) */}
       <ImportMapping
         sourceAccounts={sourceAccounts}
-        sourceCategories={sourceCategories}
         accounts={accounts}
-        categories={categories}
         accountMapping={accountMapping}
-        categoryMapping={categoryMapping}
-        onAccountMappingChange={setAccountMapping}
-        onCategoryMappingChange={setCategoryMapping}
+        onAccountMappingChange={handleAccountMappingChange}
       />
 
       {/* Search bar */}
@@ -335,6 +418,23 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
         </div>
       </div>
 
+      {/* Issues banner (hidden while enrichment is running) */}
+      {!enrichSession.isEnriching && (uncategorizedCount > 0 || lowConfidenceCount > 0) && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3.5 py-2 text-sm text-foreground/70">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+          <span>
+            {[
+              uncategorizedCount > 0 &&
+                `${uncategorizedCount} uncategorized`,
+              lowConfidenceCount > 0 &&
+                `${lowConfidenceCount} low confidence`,
+            ]
+              .filter(Boolean)
+              .join(", ")}
+          </span>
+        </div>
+      )}
+
       {/* Transaction table */}
       <div className="rounded-xl border border-border/40 overflow-hidden">
         <ImportTable
@@ -347,6 +447,7 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
           allSelected={allSelected}
           indeterminate={indeterminate}
           onUpdateTransaction={handleUpdate}
+          categories={categories}
         />
       </div>
 
@@ -364,10 +465,20 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
               </span>
             </div>
 
-            {/* Enrich (magic) button */}
-            <Button size="sm" variant="outline" className="gap-1.5" disabled>
-              <Sparkles className="h-3.5 w-3.5" />
-              Enrich
+            {/* Re-enrich button */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              disabled={enrichSession.isEnriching}
+              onClick={handleEnrich}
+            >
+              {enrichSession.isEnriching ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {enrichSession.isEnriching ? "Enriching…" : "Enrich"}
             </Button>
 
             {/* Merge button */}
@@ -414,18 +525,10 @@ export function ImportPreview({ budgetPath }: ImportPreviewProps) {
                     </strong>{" "}
                     ({formatMoney(selectedTotal)}) to your budget.
                   </span>
-                  {(newAccountCount > 0 || newCategoryCount > 0) && (
+                  {newAccountCount > 0 && (
                     <span className="block">
-                      New entities will be created:{" "}
-                      {[
-                        newAccountCount > 0 &&
-                          `${newAccountCount} account${newAccountCount > 1 ? "s" : ""}`,
-                        newCategoryCount > 0 &&
-                          `${newCategoryCount} categor${newCategoryCount > 1 ? "ies" : "y"}`,
-                      ]
-                        .filter(Boolean)
-                        .join(" and ")}
-                      .
+                      {newAccountCount} new account
+                      {newAccountCount > 1 ? "s" : ""} will be created.
                     </span>
                   )}
                 </span>
