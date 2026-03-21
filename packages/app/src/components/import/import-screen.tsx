@@ -14,12 +14,12 @@ import {
   Image,
   Loader2,
   Wrench,
+  Settings,
 } from "lucide-react";
 import { toast } from "sonner";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Button } from "@/components/ui/button";
 import { useImportSession } from "@/hooks/use-import-session";
-import { useImportPaths } from "@/hooks/use-import-paths";
+import { useImportRepository } from "@/hooks/use-import-repository";
 import { useImportStore } from "@/stores/import-store";
 import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { getToolLabel } from "@/services/capy-stream";
@@ -31,6 +31,7 @@ import {
   type FileAttachment,
   type ContentBlock,
 } from "@capybudget/intelligence";
+import { InstructionsDialog } from "@/components/capy/instructions-dialog";
 import { ImportPreview } from "./import-preview";
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -76,38 +77,20 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
     [setGlobalHasImportData],
   );
 
-  const { resolveImportPath } = useImportPaths(budgetPath);
+  const repository = useImportRepository(budgetPath);
 
   const checkDisk = useCallback(async () => {
-    try {
-      const csvPath = await resolveImportPath("transactions.csv");
-      console.log("[import] checkDisk: reading", csvPath);
-      const content = await readTextFile(csvPath);
-      const has = content.trim().length > 0;
-      console.log("[import] checkDisk: hasImportData =", has, `(${content.length} bytes)`);
-      setHasImportData(has);
-    } catch (err) {
-      console.log("[import] checkDisk: no CSV found", err);
-      setHasImportData(false);
-    }
-  }, [resolveImportPath, setHasImportData]);
+    const has = await repository.hasImportData();
+    setHasImportData(has);
+  }, [repository, setHasImportData]);
 
   // Check disk on mount
   useEffect(() => {
-    let cancelled = false;
-    async function run() {
-      console.log("[import] mount: checking disk for existing import data");
-      try {
-        const csvPath = await resolveImportPath("transactions.csv");
-        const content = await readTextFile(csvPath);
-        if (!cancelled) setHasImportData(content.trim().length > 0);
-      } catch {
-        if (!cancelled) setHasImportData(false);
-      }
+    async function init() {
+      await checkDisk();
     }
-    run();
-    return () => { cancelled = true; };
-  }, [resolveImportPath, setHasImportData]);
+    init();
+  }, [checkDisk]);
 
   // ── Local UI state ──────────────────────────────────────────
   const [files, setFiles] = useState<FileAttachment[]>([]);
@@ -117,6 +100,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const customInstructions = useCustomInstructions(budgetPath);
+  const [showInstructions, setShowInstructions] = useState(false);
 
   // ── Intelligence session ────────────────────────────────────
   const importSession = useImportSession({
@@ -211,9 +195,17 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
   };
 
   // ── Actions ─────────────────────────────────────────────────
-  const handleStart = () => {
+  const handleStart = async () => {
     if (files.length === 0 || isProcessing) return;
     console.log("[import] starting normalization with", files.length, "files");
+
+    // Persist source file names so the merge step can log them
+    try {
+      await repository.writeState({ sourceFiles: files.map((f) => f.name) });
+    } catch {
+      /* best-effort */
+    }
+
     importSession.startNormalization(files);
   };
 
@@ -221,12 +213,9 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
     console.log("[import] cancelling import");
     importSession.cancel();
     setFiles([]);
-    await Promise.allSettled([
-      resolveImportPath("state.json").then((p) => writeTextFile(p, "")),
-      resolveImportPath("transactions.csv").then((p) => writeTextFile(p, "")),
-    ]);
+    await repository.clearImportData();
     setHasImportData(false);
-  }, [importSession, resolveImportPath, setHasImportData]);
+  }, [importSession, repository, setHasImportData]);
 
   // ── Derived view ────────────────────────────────────────────
   // no files  → drop zone + Start
@@ -263,12 +252,21 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
             <h2 className="text-xl font-bold tracking-tight">Import</h2>
             <p className="text-sm text-muted-foreground">{subtitle}</p>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowInstructions(true)}
+            className="gap-1.5 shrink-0"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Capy Instructions
+          </Button>
           {(showProcessing || showPreview) && (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={handleCancel}
-              className="text-muted-foreground gap-1.5 shrink-0"
+              className="gap-1.5 shrink-0"
             >
               <X className="h-3.5 w-3.5" />
               Cancel Import
@@ -399,10 +397,23 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
           )}
 
           {/* ── Preview area ───────────────────────────────── */}
-          {showPreview && <ImportPreview budgetPath={budgetPath} budgetName={budgetName} />}
+          {showPreview && (
+            <ImportPreview
+              budgetPath={budgetPath}
+              budgetName={budgetName}
+              onMergeComplete={() => { setFiles([]); setHasImportData(false); }}
+            />
+          )}
 
         </div>
       </div>
+
+      <InstructionsDialog
+        open={showInstructions}
+        onOpenChange={setShowInstructions}
+        instructions={customInstructions.instructions}
+        onSave={customInstructions.save}
+      />
     </div>
   );
 }

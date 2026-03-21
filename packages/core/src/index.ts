@@ -98,5 +98,14 @@ export {
 // Import types
 export type {
   ImportTransaction,
+  ImportAliases,
   ImportPhase,
 } from "./import-types";
+
+// Import merge operations
+export type { MergeInput, MergeOutput } from "./import-merge";
+export { prepareMerge } from "./import-merge";
+
+// Import validation
+export type { ValidationResult } from "./import-validation";
+export { validateImportTransactions } from "./import-validation";
