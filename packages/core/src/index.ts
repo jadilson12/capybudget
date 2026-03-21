@@ -100,6 +100,7 @@ export type {
   ImportTransaction,
   ImportAliases,
   ImportPhase,
+  ImportLogEntry,
 } from "./import-types";
 
 // Import merge operations
@@ -109,3 +110,7 @@ export { prepareMerge } from "./import-merge";
 // Import validation
 export type { ValidationResult } from "./import-validation";
 export { validateImportTransactions } from "./import-validation";
+
+// Import duplicate detection
+export type { DuplicateConfidence, DuplicateMatch } from "./import-duplicates";
+export { detectDuplicates } from "./import-duplicates";

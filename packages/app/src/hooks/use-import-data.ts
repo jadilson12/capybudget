@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAccounts, useCategories } from "@/hooks/use-budget-data";
+import { useAccounts, useCategories, useTransactions } from "@/hooks/use-budget-data";
 import { useImportRepository } from "@/hooks/use-import-repository";
-import type { ImportTransaction, ImportAliases } from "@capybudget/core";
+import { detectDuplicates } from "@capybudget/core";
+import type { ImportTransaction, ImportAliases, DuplicateMatch } from "@capybudget/core";
 import type { EntityMapping } from "@/components/import/import-mapping";
 
 /**
@@ -21,6 +22,7 @@ export function useImportData(budgetPath: string) {
 
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
+  const { data: existingTransactions = [] } = useTransactions();
 
   const repository = useImportRepository(budgetPath);
 
@@ -53,11 +55,13 @@ export function useImportData(budgetPath: string) {
   }, [writeBack]);
 
   // ── Load CSV on mount ────────────────────────────────────────
+  const [loadGeneration, setLoadGeneration] = useState(0);
   const loadCsv = useCallback(async () => {
     try {
       const parsed = await repository.readTransactionsCsv();
       setTransactions(parsed);
       setSelectedIds(new Set(parsed.map((t) => t.id)));
+      setLoadGeneration((g) => g + 1);
       setLoading(false);
     } catch {
       setLoading(false);
@@ -211,6 +215,30 @@ export function useImportData(budgetPath: string) {
     [transactions],
   );
 
+  // ── Duplicate detection ────────────────────────────────────────
+  const duplicates = useMemo<Map<string, DuplicateMatch>>(
+    () => detectDuplicates(transactions, existingTransactions, accountMapping),
+    [transactions, existingTransactions, accountMapping],
+  );
+
+  // Auto-unselect duplicates once per load cycle
+  const duplicatesAppliedForGenRef = useRef(-1);
+  useEffect(() => {
+    if (duplicatesAppliedForGenRef.current === loadGeneration || duplicates.size === 0 || loading) return;
+    duplicatesAppliedForGenRef.current = loadGeneration;
+
+    async function unselectDuplicates() {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of duplicates.keys()) {
+          next.delete(id);
+        }
+        return next;
+      });
+    }
+    unselectDuplicates();
+  }, [duplicates, loading, loadGeneration]);
+
   return {
     // State
     transactions,
@@ -231,6 +259,7 @@ export function useImportData(budgetPath: string) {
     sourceAccounts,
     uncategorizedCount,
     lowConfidenceCount,
+    duplicates,
     accounts,
     categories,
   };

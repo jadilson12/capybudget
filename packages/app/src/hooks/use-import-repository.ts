@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { parseCsv, unparseCsv } from "@capybudget/persistence";
 import { validateImportTransactions } from "@capybudget/core";
-import type { ImportTransaction, ImportAliases } from "@capybudget/core";
+import type { ImportTransaction, ImportAliases, ImportLogEntry } from "@capybudget/core";
 import { useImportPaths } from "./use-import-paths";
 
 const IMPORT_COERCE = { amount: (v: string) => parseInt(v, 10) };
@@ -16,13 +16,6 @@ export interface ImportState {
  * Centralizes all import disk I/O: CSV read/write, state.json, aliases.json.
  * Components should use this instead of scattered readTextFile/writeTextFile calls.
  */
-export interface ImportLogEntry {
-  date: string;
-  sourceFiles: string[];
-  transactionCount: number;
-  accountsCreated: string[];
-  dateRange: { from: string; to: string };
-}
 
 export function useImportRepository(budgetPath: string) {
   const { resolveImportPath, resolveAliasPath, resolveLogPath } = useImportPaths(budgetPath);
@@ -118,6 +111,18 @@ export function useImportRepository(budgetPath: string) {
     }
   }, [resolveLogPath]);
 
+  const readImportLog = useCallback(async (): Promise<ImportLogEntry[]> => {
+    try {
+      const logPath = await resolveLogPath();
+      const content = await readTextFile(logPath);
+      const log = JSON.parse(content);
+      if (!Array.isArray(log)) return [];
+      return log as ImportLogEntry[];
+    } catch {
+      return [];
+    }
+  }, [resolveLogPath]);
+
   const hasImportData = useCallback(async (): Promise<boolean> => {
     try {
       const csvPath = await resolveImportPath("transactions.csv");
@@ -138,6 +143,7 @@ export function useImportRepository(budgetPath: string) {
       writeAliases,
       clearImportData,
       appendImportLog,
+      readImportLog,
       hasImportData,
     }),
     [
@@ -149,6 +155,7 @@ export function useImportRepository(budgetPath: string) {
       writeAliases,
       clearImportData,
       appendImportLog,
+      readImportLog,
       hasImportData,
     ],
   );
