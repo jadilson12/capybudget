@@ -35,7 +35,7 @@ export function DemoBudgetSelector() {
           </p>
         </div>
 
-        <div className="flex justify-center gap-12">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-12">
           {PRESET_LIST.map((preset) => {
             const sticker = PRESET_STICKERS[preset.id];
             return (
