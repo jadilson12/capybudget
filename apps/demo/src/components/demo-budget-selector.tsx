@@ -1,15 +1,14 @@
 import { useNavigate } from "@tanstack/react-router";
-import { TrendingDown, Clock, Sparkles } from "lucide-react";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ColorThemeSwitcher } from "@/components/color-theme-switcher";
 import { PRESET_LIST } from "../data/presets";
 import type { DemoPreset } from "../data/presets";
 
-const PRESET_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  underwater: TrendingDown,
-  "paycheck-to-paycheck": Clock,
-  "no-stress": Sparkles,
+const PRESET_STICKERS: Record<string, string> = {
+  underwater: "/capy-broke.png",
+  "paycheck-to-paycheck": "/capy-fine.png",
+  "no-stress": "/capy-great.png",
 };
 
 export function DemoBudgetSelector() {
@@ -36,20 +35,24 @@ export function DemoBudgetSelector() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="flex justify-center gap-12">
           {PRESET_LIST.map((preset) => {
-            const Icon = PRESET_ICONS[preset.id];
+            const sticker = PRESET_STICKERS[preset.id];
             return (
-              <Card
+              <button
                 key={preset.id}
-                className="cursor-pointer transition-all hover:bg-accent hover:shadow-md py-0"
+                className="flex flex-col items-center gap-3 cursor-pointer transition-transform hover:scale-110"
                 onClick={() => handleSelect(preset)}
               >
-                <CardHeader className="items-center text-center p-6 space-y-3">
-                  {Icon && <Icon className="h-8 w-8 text-primary self-center" />}
-                  <CardTitle className="text-lg">{preset.name}</CardTitle>
-                </CardHeader>
-              </Card>
+                {sticker && (
+                  <img
+                    src={sticker}
+                    alt={preset.name}
+                    className="h-40 w-40 object-contain"
+                  />
+                )}
+                <span className="text-lg font-semibold whitespace-nowrap">{preset.name}</span>
+              </button>
             );
           })}
         </div>
