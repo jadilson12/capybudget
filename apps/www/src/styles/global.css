@@ -1,23 +1,74 @@
 @import "tailwindcss";
 @import "@fontsource-variable/geist";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Semantic color values — switch with data-theme */
+:root {
+  --sem-heading: oklch(0.16 0.02 55);
+  --sem-body: oklch(0.35 0.02 55);
+  --sem-muted: oklch(0.49 0.02 55);
+  --sem-subtle: oklch(0.62 0.025 55);
+  --sem-faint: oklch(0.62 0.025 55);
+  --sem-page: oklch(0.993 0.003 80);
+  --sem-surface: #ffffff;
+  --sem-surface-alt: oklch(0.975 0.015 62);
+  --sem-surface-nav: oklch(0.993 0.003 80 / 0.8);
+  --sem-surface-hover: oklch(0.955 0.01 68);
+  --sem-line: oklch(0.91 0.012 68);
+  --sem-code-bg: oklch(0.955 0.01 68);
+  --sem-code-text: oklch(0.22 0.03 55);
+  --sem-pre-bg: oklch(0.12 0.015 55);
+  --sem-pre-text: oklch(0.955 0.01 68);
+}
+
+[data-theme="dark"] {
+  --sem-heading: #fef3c7;
+  --sem-body: rgba(254, 243, 199, 0.6);
+  --sem-muted: rgba(254, 243, 199, 0.5);
+  --sem-subtle: rgba(254, 243, 199, 0.4);
+  --sem-faint: rgba(254, 243, 199, 0.2);
+  --sem-page: #0c0a09;
+  --sem-surface: rgba(255, 255, 255, 0.03);
+  --sem-surface-alt: rgba(255, 255, 255, 0.02);
+  --sem-surface-nav: rgba(12, 10, 9, 0.7);
+  --sem-surface-hover: rgba(255, 255, 255, 0.1);
+  --sem-line: rgba(255, 255, 255, 0.05);
+  --sem-code-bg: rgba(255, 255, 255, 0.1);
+  --sem-code-text: #fbbf24;
+  --sem-pre-bg: rgba(255, 255, 255, 0.05);
+  --sem-pre-text: rgba(254, 243, 199, 0.7);
+}
+
 @theme {
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 
+  /* Semantic colors — auto-switch with data-theme */
+  --color-heading: var(--sem-heading);
+  --color-body: var(--sem-body);
+  --color-muted: var(--sem-muted);
+  --color-subtle: var(--sem-subtle);
+  --color-faint: var(--sem-faint);
+  --color-page: var(--sem-page);
+  --color-surface: var(--sem-surface);
+  --color-surface-alt: var(--sem-surface-alt);
+  --color-surface-nav: var(--sem-surface-nav);
+  --color-surface-hover: var(--sem-surface-hover);
+  --color-line: var(--sem-line);
+  --color-code-bg: var(--sem-code-bg);
+  --color-code-text: var(--sem-code-text);
+  --color-pre-bg: var(--sem-pre-bg);
+  --color-pre-text: var(--sem-pre-text);
+
+  /* Accent palette — theme-independent */
   --color-brand: oklch(0.58 0.14 55);
   --color-brand-light: oklch(0.74 0.11 58);
-  --color-brand-subtle: oklch(0.92 0.04 60);
-
-  --color-warm-50: oklch(0.993 0.003 80);
-  --color-warm-100: oklch(0.975 0.015 62);
-  --color-warm-200: oklch(0.955 0.01 68);
-  --color-warm-300: oklch(0.91 0.012 68);
-  --color-warm-400: oklch(0.62 0.025 55);
-  --color-warm-500: oklch(0.49 0.02 55);
-  --color-warm-600: oklch(0.35 0.02 55);
-  --color-warm-700: oklch(0.22 0.03 55);
-  --color-warm-800: oklch(0.16 0.02 55);
-  --color-warm-900: oklch(0.12 0.015 55);
+  --color-terra: oklch(0.62 0.16 38);
+  --color-terra-light: oklch(0.72 0.12 40);
+  --color-sage: oklch(0.62 0.10 148);
+  --color-sage-light: oklch(0.78 0.08 148);
+  --color-gold: oklch(0.72 0.14 85);
+  --color-gold-light: oklch(0.82 0.10 85);
 }
 
 html {
@@ -26,6 +77,6 @@ html {
 }
 
 body {
-  color: var(--color-warm-800);
-  background-color: var(--color-warm-50);
+  color: var(--color-heading);
+  background-color: var(--color-page);
 }

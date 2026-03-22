@@ -9,6 +9,15 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
+## 0.15.1 — 2026-03-22
+
+Promo website polish — light/dark theme support with semantic design tokens.
+
+- Light/dark theme toggle with system preference detection and localStorage persistence
+- Semantic color tokens (heading, body, muted, surface, line, etc.) auto-switch with theme
+- Light theme: V3 warm cream palette with terra/sage/gold accents
+- Dark theme: V2 dark glass aesthetic with amber accents and ambient orbs
+
 ## 0.15.0 — 2026-03-22
 
 Promo website — Astro 6 static site for capybudget.app.

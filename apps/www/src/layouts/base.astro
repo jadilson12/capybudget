@@ -17,47 +17,76 @@ const { title, description = "Personal finance tracking. Local-first, CSV-backed
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title}</title>
+    <script is:inline>
+      (function() {
+        var s = localStorage.getItem('theme');
+        if (!s) s = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', s);
+      })();
+    </script>
   </head>
-  <body class="min-h-screen flex flex-col">
-    <nav class="sticky top-0 z-50 border-b border-warm-300 bg-warm-50/80 backdrop-blur-md">
+  <body class="min-h-screen flex flex-col overflow-x-hidden">
+    <!-- Dark mode ambient orbs -->
+    <div class="hidden dark:block fixed inset-0 pointer-events-none z-0" aria-hidden="true">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+    </div>
+
+    <nav class="sticky top-0 z-50 border-b border-line bg-surface-nav backdrop-blur-md">
       <div class="mx-auto max-w-5xl flex items-center justify-between px-6 py-4">
-        <a href="/" class="flex items-center gap-2 text-lg font-semibold text-warm-800">
+        <a href="/" class="flex items-center gap-2 text-lg font-semibold text-heading">
           <img src="/capy-great.png" alt="" class="h-8 w-8 rounded-full" />
           Capy Budget
         </a>
-        <div class="flex items-center gap-6 text-sm font-medium text-warm-500">
-          <a href="/docs/getting-started" class="hover:text-warm-800 transition-colors">Docs</a>
-          <a href="/privacy" class="hover:text-warm-800 transition-colors">Privacy</a>
-          <a href="https://demo.capybudget.app" class="hover:text-warm-800 transition-colors" target="_blank" rel="noopener noreferrer">Demo</a>
+        <div class="flex items-center gap-6 text-sm font-medium text-muted">
+          <a href="/docs/getting-started" class="hover:text-heading transition-colors">Docs</a>
+          <a href="/privacy" class="hover:text-heading transition-colors">Privacy</a>
+          <a href="https://demo.capybudget.app" class="hover:text-heading transition-colors" target="_blank" rel="noopener noreferrer">Demo</a>
           <a
             href="https://github.com/vladimir-e/capybudget"
-            class="hover:text-warm-800 transition-colors"
+            class="hover:text-heading transition-colors"
             target="_blank"
             rel="noopener noreferrer"
           >
             GitHub
           </a>
+          <button
+            id="theme-toggle"
+            type="button"
+            class="ml-2 p-2 rounded-lg hover:bg-surface-hover transition-colors"
+            aria-label="Toggle theme"
+          >
+            <!-- Sun icon (shown in dark mode) -->
+            <svg class="hidden dark:block h-4 w-4 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+            </svg>
+            <!-- Moon icon (shown in light mode) -->
+            <svg class="block dark:hidden h-4 w-4 text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+            </svg>
+          </button>
         </div>
       </div>
     </nav>
 
-    <main class="flex-1">
+    <main class="relative z-[1] flex-1">
       <slot />
     </main>
 
-    <footer class="border-t border-warm-300 bg-warm-100">
+    <footer class="relative z-[1] border-t border-line bg-surface-alt">
       <div class="mx-auto max-w-5xl px-6 py-10">
         <div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p class="font-semibold text-warm-800">Capy Budget</p>
-            <p class="mt-1 text-sm text-warm-500">Your finances, your files, your rules.</p>
+            <p class="font-semibold text-heading">Capy Budget</p>
+            <p class="mt-1 text-sm text-muted">Your finances, your files, your rules.</p>
           </div>
-          <div class="flex flex-col gap-2 text-sm text-warm-500">
-            <a href="/docs/getting-started" class="hover:text-warm-800 transition-colors">Documentation</a>
-            <a href="/privacy" class="hover:text-warm-800 transition-colors">Privacy Policy</a>
+          <div class="flex flex-col gap-2 text-sm text-muted">
+            <a href="/docs/getting-started" class="hover:text-heading transition-colors">Documentation</a>
+            <a href="/privacy" class="hover:text-heading transition-colors">Privacy Policy</a>
             <a
               href="https://github.com/vladimir-e/capybudget"
-              class="hover:text-warm-800 transition-colors"
+              class="hover:text-heading transition-colors"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -65,10 +94,61 @@ const { title, description = "Personal finance tracking. Local-first, CSV-backed
             </a>
           </div>
         </div>
-        <p class="mt-8 text-xs text-warm-400">
+        <p class="mt-8 text-xs text-faint">
           Open source under the MIT License.
         </p>
       </div>
     </footer>
+
+    <script is:inline>
+      document.getElementById('theme-toggle').addEventListener('click', function() {
+        var html = document.documentElement;
+        var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        html.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+      });
+    </script>
   </body>
 </html>
+
+<style>
+  .orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.15;
+  }
+  .orb-1 {
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, #f59e0b, transparent 70%);
+    top: -200px;
+    right: -150px;
+    animation: drift-1 20s ease-in-out infinite alternate;
+  }
+  .orb-2 {
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, #ea580c, transparent 70%);
+    bottom: 10%;
+    left: -200px;
+    animation: drift-2 25s ease-in-out infinite alternate;
+  }
+  .orb-3 {
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, #d97706, transparent 70%);
+    top: 50%;
+    right: 20%;
+    animation: drift-3 18s ease-in-out infinite alternate;
+  }
+  @keyframes drift-1 { to { transform: translate(-80px, 60px); } }
+  @keyframes drift-2 { to { transform: translate(60px, -40px); } }
+  @keyframes drift-3 { to { transform: translate(-40px, -60px); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .orb-1, .orb-2, .orb-3 {
+      animation: none;
+    }
+  }
+</style>
