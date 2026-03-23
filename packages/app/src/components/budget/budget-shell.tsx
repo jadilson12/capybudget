@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useNavigate } from "@tanstack/react-router";
+import { Outlet, useMatches, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { NavigationRail, type Section } from "@/components/budget/navigation-rail";
 import { Sidebar } from "@/components/budget/sidebar";
 import { AccountDialog } from "@/components/budget/account-dialog";
 import { TransactionForm } from "@/components/budget/transaction-form";
@@ -21,6 +22,7 @@ import { useAccounts, budgetKeys } from "@/hooks/use-budget-data";
 import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { useCustomCommands } from "@/hooks/use-custom-commands";
 import { useBudgetRepository } from "@/providers/repository-provider";
+import { useImportStore } from "@/stores/import-store";
 import type { DisposableRepository } from "@capybudget/persistence";
 import {
   DropdownMenu,
@@ -29,7 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown, ChevronLeft, FolderOpen, LogOut } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FolderOpen, LogOut } from "lucide-react";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import type { Account, Transaction, TransactionFormData } from "@capybudget/core";
 import { toast } from "sonner";
@@ -58,6 +60,15 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
   const { data: accounts = [] } = useAccounts();
   const hasAccounts = accounts.some((a) => !a.archived);
 
+  // Determine active section from current route
+  const matches = useMatches();
+  const activeSection: Section = matches.some((m) => m.routeId?.includes("/categories"))
+    ? "budget"
+    : matches.some((m) => m.routeId?.includes("/import"))
+      ? "import"
+      : "accounts";
+
+  const hasImportData = useImportStore((s) => s.hasImportData);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -195,6 +206,7 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
   return (
     <BudgetUIProvider value={uiCtx}>
       <div className="flex h-screen flex-col">
+        {/* Header — full width, top */}
         <header className="grid grid-cols-3 items-center border-b px-4 py-2 bg-background/80 backdrop-blur-sm">
           <div className="flex items-center">
             <DropdownMenu>
@@ -233,16 +245,18 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
               >
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${effectiveFormOpen ? "rotate-180" : ""}`} />
                 <span>New Transaction</span>
-                <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/70 border border-border/50">
+                <kbd className="hidden sm:inline rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/70 border border-border/50">
                   {isMac ? "\u2318" : "Ctrl+"}N
                 </kbd>
               </button>
             )}
           </div>
           <div className="flex items-center justify-end gap-1">
-            <ColorThemeSwitcher />
-            <ThemeToggle />
-            <div className="ml-1.5 border-l border-border/50 pl-2.5">
+            <div className="hidden md:flex items-center gap-1">
+              <ColorThemeSwitcher />
+              <ThemeToggle />
+            </div>
+            <div className="md:ml-1.5 md:border-l md:border-border/50 md:pl-2.5">
               <CapyButton
                 active={capyOpen}
                 onClick={() => setCapyOpen((prev) => !prev)}
@@ -251,29 +265,54 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
           </div>
         </header>
 
+        {/* Below header: rail + sidebar + content */}
         <div className="relative flex flex-1 overflow-hidden">
-          <Sidebar
+          <NavigationRail
             budgetPath={path}
             budgetName={name}
-            collapsed={sidebarCollapsed}
-            onCollapse={setSidebarCollapsed}
-            onAddAccount={() => setAccountDialogOpen(true)}
-            onEditAccount={(account) => { setEditingAccount(account); setAccountDialogOpen(true); }}
-            onReorderAccounts={handleReorderAccounts}
+            activeSection={activeSection}
+            sidebarOpen={activeSection === "accounts" && !sidebarCollapsed}
+            onToggleSidebar={() => setSidebarCollapsed((prev) => !prev)}
+            hasImportData={hasImportData}
           />
-          <main className="relative flex-1 overflow-auto bg-background">
-            {!sidebarCollapsed && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute right-3 top-3 z-10 h-7 w-7 text-muted-foreground hover:text-foreground"
-                onClick={() => setSidebarCollapsed(true)}
+
+          {/* Accounts sidebar — slides in/out, same behavior all viewports */}
+          {activeSection === "accounts" && (
+            <>
+              <div
+                className={`overflow-hidden transition-[width] duration-200 ease-out shrink-0 ${
+                  sidebarCollapsed ? "w-0" : "w-72"
+                }`}
+                {...(sidebarCollapsed ? { inert: true, "aria-hidden": true } : {})}
               >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-            )}
+                <Sidebar
+                  budgetPath={path}
+                  budgetName={name}
+                  onAddAccount={() => setAccountDialogOpen(true)}
+                  onEditAccount={(account) => { setEditingAccount(account); setAccountDialogOpen(true); }}
+                  onReorderAccounts={handleReorderAccounts}
+                />
+              </div>
+              {/* Edge handle — always visible */}
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed((prev) => !prev)}
+                className="flex w-4 shrink-0 items-center justify-center border-r border-sidebar-border bg-sidebar text-muted-foreground/30 hover:text-muted-foreground hover:bg-sidebar-accent transition-colors"
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                {sidebarCollapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </>
+          )}
+
+          <main className="relative flex-1 overflow-x-auto overflow-y-auto bg-background pb-14 md:pb-0 min-w-0">
             <Outlet />
           </main>
+
           {effectiveFormOpen && (
             <div
               className="absolute inset-0 z-[9] bg-black/5 backdrop-blur-[1px] transition-opacity"
@@ -299,31 +338,31 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
             </div>
           </div>
         </div>
-
-        <CapyOverlay
-          open={capyOpen}
-          onClose={() => setCapyOpen(false)}
-          messages={capy.messages}
-          isStreaming={capy.isStreaming}
-          onSend={capy.sendMessage}
-          onStop={capy.stopStreaming}
-          onNewChat={capy.newChat}
-          instructions={customInstructions.instructions}
-          onSaveInstructions={customInstructions.save}
-          commands={customCommands.commands}
-          onSaveCommands={customCommands.save}
-        />
-
-        <AccountDialog
-          key={editingAccount?.id ?? "new"}
-          open={accountDialogOpen}
-          onOpenChange={(open) => {
-            setAccountDialogOpen(open);
-            if (!open) setEditingAccount(null);
-          }}
-          editingAccount={editingAccount}
-        />
       </div>
+
+      <CapyOverlay
+        open={capyOpen}
+        onClose={() => setCapyOpen(false)}
+        messages={capy.messages}
+        isStreaming={capy.isStreaming}
+        onSend={capy.sendMessage}
+        onStop={capy.stopStreaming}
+        onNewChat={capy.newChat}
+        instructions={customInstructions.instructions}
+        onSaveInstructions={customInstructions.save}
+        commands={customCommands.commands}
+        onSaveCommands={customCommands.save}
+      />
+
+      <AccountDialog
+        key={editingAccount?.id ?? "new"}
+        open={accountDialogOpen}
+        onOpenChange={(open) => {
+          setAccountDialogOpen(open);
+          if (!open) setEditingAccount(null);
+        }}
+        editingAccount={editingAccount}
+      />
     </BudgetUIProvider>
   );
 }
