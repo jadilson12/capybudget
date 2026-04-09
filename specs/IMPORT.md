@@ -20,7 +20,10 @@ Supported input: CSV, images, PDFs.
 
 Start triggers intelligence. The agent reads the same custom instructions as the Capy chat (`capy-instructions.md`).
 
-The agent converts dropped files into a uniform internal CSV format, stored in `.capy/import/`. CSV is chosen over JSON — more fault-tolerant and more efficient on the context window.
+The agent converts dropped files into a uniform internal CSV format, stored in `.capy/import/transactions.csv`. Two normalization paths:
+
+- **CSV files**: AI analyzes a sample via `analyze_csv`, defines a `CsvMapping` (column positions, date format, amount format, skip rows), previews via `preview_transform`, then executes `transform_csv`. All rows processed instantly in code — no AI per-row processing. When multiple CSVs are imported, each `transform_csv` call appends to the existing `transactions.csv` with continuing IDs.
+- **Images/PDFs**: AI reads files from disk, extracts transactions manually. Suitable for small-volume imports (receipts, statements).
 
 #### Import CSV Schema
 
@@ -39,6 +42,17 @@ The agent converts dropped files into a uniform internal CSV format, stored in `
 
 Transfer detection is a hard problem — the agent must identify matching pairs across accounts and dates.
 
+### File Management
+
+Files are saved to `.capy/import/sources/` immediately on drop — disk is the source of truth. Import state survives crashes.
+
+```
+.capy/import/
+  sources/          # User's original files (CSV, images, PDFs)
+  transactions.csv  # Normalized output
+  state.json        # Import metadata
+```
+
 ### 3. Preview
 
 An independent front-end module operating entirely on import files — no direct budget data dependency until merge.
@@ -55,6 +69,15 @@ Logical successor of the Start button, shown in the preview area. Intelligence c
 
 The agent also resolves `sourceAccount` and `sourceCategory` strings to existing budget entities.
 
+Enrichment uses primitive tools instead of bulk CSV read/write:
+
+1. `auto_enrich` runs first — code-based matching (sourceCategory to categories, sourceAccount to accounts, description to merchant). Uses score-based fuzzy matching for categories.
+2. `enrich_stats` gives the AI a compact progress summary.
+3. `enrich_sample` returns ~20 evenly-spaced rows needing work — representative cross-section, not just the first rows.
+4. `enrich_update` applies bulk SET WHERE updates (like SQL UPDATE). Supports single or array of WHERE conditions (AND logic).
+
+The AI works in a size-aware REPL loop: for small imports (~30 rows), it processes individually; for large imports, it pattern-matches in bulk — check stats, read a sample, apply a pattern, repeat. It also cleans merchant names (stripping bank prefixes, location suffixes, store numbers). Enrichment results are cached in memory across tool calls for efficiency.
+
 ### 5. Review & Merge
 
 User reviews enriched data, makes final corrections.
@@ -63,9 +86,9 @@ Merge pumps processed data into the budget database — creating mapped entities
 
 ## Import State
 
-Import is persistent — the user can leave the screen and return. A sidebar navigation item indicates when an import is in progress.
+Import state lives in a Zustand store with an explicit phase machine: `idle` → `normalizing` → `preview`. Sessions survive navigation — the user can leave the import screen and return without losing progress. The navigation indicator pulses during active normalization or enrichment.
 
-Cancel resets to the file drop screen at any time, clearing import data from `.capy/import/`. Aliases (`.capy/aliases.json`) are preserved across cancellations.
+Cancel resets to the file drop screen at any time, clearing import data from `.capy/import/`. Aliases (`.capy/aliases.json`) are preserved across cancellations. A stop button allows interrupting enrichment mid-session, with progress auto-refresh.
 
 ## Import Log
 
@@ -102,12 +125,22 @@ Account resolution uses the account mapping (sourceAccount → budget accountId)
 
 ## Intelligence Tools
 
-### Import file tools
+### CSV transform tools
 
-File operations scoped to `.capy/import/` — the agent reads and writes normalized data here:
+Code-based normalization — AI defines the mapping, code processes all rows:
 
-- `read_import_file` / `write_import_file` / `append_import_file` — CRUD for import staging files
-- `list_import_files` — directory listing
+- `analyze_csv` — returns headers, sample rows (efficiently parsed), row count estimate, and parse errors if any
+- `preview_transform` — applies a CsvMapping to sample rows, returns preview of normalized output with parse errors
+- `transform_csv` — executes the mapping against all rows, appends to `transactions.csv` (supports multi-file imports)
+
+### Enrichment tools
+
+Primitive tools for AI-assisted enrichment — small samples in, bulk updates out:
+
+- `auto_enrich` — score-based matching (sourceCategory→categories, sourceAccount→accounts, description→merchant)
+- `enrich_stats` — compact progress summary (how many rows enriched, how many remain)
+- `enrich_sample` — ~20 evenly-spaced CSV rows needing work (representative sampling)
+- `enrich_update` — bulk SET WHERE (like SQL UPDATE) for merchant, category, account, confidence. Supports array of WHERE conditions (AND logic). Only sets empty fields.
 
 ### Budget query tools
 
@@ -117,8 +150,6 @@ Deterministic functions querying budget data, available during both normalizatio
 - `list_categories` — all categories grouped
 - `list_transactions` — filterable by account, merchant substring, date range
 - `spending_summary` — totals by category for a date range
-
-Offload as much matching work as possible from the intelligence layer into precise, composable tools.
 
 ## Custom Instructions
 

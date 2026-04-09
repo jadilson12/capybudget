@@ -103,6 +103,9 @@ export type {
   ImportLogEntry,
 } from "./import-types";
 
+// Import account matching
+export { matchAccountsByName } from "./import-matching";
+
 // Import merge operations
 export type { MergeInput, MergeOutput } from "./import-merge";
 export { prepareMerge } from "./import-merge";
@@ -114,3 +117,21 @@ export { validateImportTransactions } from "./import-validation";
 // Import duplicate detection
 export type { DuplicateConfidence, DuplicateMatch } from "./import-duplicates";
 export { detectDuplicates } from "./import-duplicates";
+
+// CSV mapping types
+export type {
+  CsvMapping,
+  AmountMapping,
+  SingleAmountMapping,
+  SplitAmountMapping,
+  AmountFormat,
+  TypeDetection,
+  SkipRule,
+  ColumnRef,
+  SingleColumnRef,
+  MultiColumnRef,
+} from "./csv-mapping";
+
+// CSV transform engine
+export type { TransformResult, TransformError } from "./csv-transform";
+export { transformCsv, serializeImportCsv, parseCurrencyToCents } from "./csv-transform";

@@ -1,17 +1,388 @@
 import { create } from "zustand";
+import { CapySession } from "@/services/capy-session";
+import { parseStreamLine } from "@/services/capy-stream";
+import {
+  buildContext,
+  type ChatMessage,
+  type ContentBlock,
+  type SessionEvent,
+  type StreamEvent,
+} from "@capybudget/intelligence";
 
 /**
- * Minimal store — just the signals the sidebar needs.
- * The import screen derives its view from disk state + session state,
- * not from a phase machine.
+ * Import store — single source of truth for import UI state.
+ *
+ * Owns:
+ * - `phase`: explicit state machine for the import flow
+ * - CapySession subprocesses (survive navigation)
+ * - Accumulated messages and status text
+ *
+ * Phase transitions:
+ *   idle ──startNormalization──▸ normalizing
+ *   normalizing ──done──▸ preview
+ *   normalizing ──cancel──▸ idle
+ *   preview ──cancel/merge──▸ idle
+ *
+ * On mount, the component checks disk to initialize:
+ *   has transactions.csv → setPhase("preview")
+ *   has sources only → stays "idle" (component shows file list)
+ *   empty → stays "idle" (component shows drop zone)
  */
+
+export type ImportPhase = "idle" | "normalizing" | "preview";
+
 interface ImportStore {
-  /** True when .capy/import/transactions.csv exists with content. */
+  phase: ImportPhase;
+  setPhase: (phase: ImportPhase) => void;
+
+  // ── Sidebar signal ──────────────────────────────────────────
   hasImportData: boolean;
   setHasImportData: (v: boolean) => void;
+
+  // ── Normalization session ───────────────────────────────────
+  normalizeSession: CapySession | null;
+  normalizeMessages: ChatMessage[];
+
+  startNormalization: (opts: {
+    budgetPath: string;
+    budgetName: string;
+    mcpServerPath: string;
+    systemPrompt: string;
+    sourceFilenames: string[];
+  }) => void;
+  cancelNormalization: () => void;
+
+  // ── Enrichment session ──────────────────────────────────────
+  enrichSession: CapySession | null;
+  isEnriching: boolean;
+  enrichStatusText: string;
+
+  startEnrichment: (opts: {
+    budgetPath: string;
+    budgetName: string;
+    mcpServerPath: string;
+    systemPrompt: string;
+  }) => void;
+  cancelEnrichment: () => void;
+  onEnrichComplete: (() => void) | null;
+  setOnEnrichComplete: (cb: (() => void) | null) => void;
 }
 
-export const useImportStore = create<ImportStore>((set) => ({
+// ── Helpers ─────────────────────────────────────────────────────
+
+let lastNormalizeTextContent = "";
+
+function appendNormalizeBlock(
+  blocks: ContentBlock[],
+  block: ContentBlock,
+): ContentBlock[] {
+  const next = [...blocks];
+  if (block.type === "text") {
+    const prevText = lastNormalizeTextContent;
+    if (prevText && block.content.startsWith(prevText)) {
+      const lastTextIdx = next.findLastIndex((b) => b.type === "text");
+      if (lastTextIdx >= 0) {
+        next[lastTextIdx] = block;
+      } else {
+        next.push(block);
+      }
+    } else {
+      next.push(block);
+    }
+    lastNormalizeTextContent = block.content;
+  } else {
+    next.push(block);
+  }
+  return next;
+}
+
+// ── Store ───────────────────────────────────────────────────────
+
+export const useImportStore = create<ImportStore>((set, get) => ({
+  phase: "idle",
+  setPhase: (phase) => set({ phase }),
+
+  // ── Sidebar ─────────────────────────────────────────────────
   hasImportData: false,
   setHasImportData: (hasImportData) => set({ hasImportData }),
+
+  // ── Normalization ───────────────────────────────────────────
+  normalizeSession: null,
+  normalizeMessages: [],
+
+  startNormalization: ({ budgetPath, budgetName, mcpServerPath, systemPrompt, sourceFilenames }) => {
+    get().normalizeSession?.kill();
+    lastNormalizeTextContent = "";
+
+    const session = new CapySession({
+      budgetPath,
+      mcpServerPath,
+      systemPrompt,
+      onEvent: (event: SessionEvent) => {
+        switch (event.type) {
+          case "stdout":
+            for (const streamEvent of parseStreamLine(event.line)) {
+              handleNormalizeStreamEvent(streamEvent, set, get);
+            }
+            break;
+          case "stderr":
+            console.debug("[import-store-stderr]", event.line);
+            break;
+          case "exit":
+            console.debug("[import-store] normalize process exited");
+            if (get().phase === "normalizing") {
+              lastNormalizeTextContent = "";
+              const errorBlock: ContentBlock = {
+                type: "text" as const,
+                content: "The normalization process ended unexpectedly. You can try again by canceling and restarting.",
+              };
+              set({
+                normalizeMessages: (() => {
+                  const msgs = get().normalizeMessages;
+                  const updated = [...msgs];
+                  const last = updated[updated.length - 1];
+                  if (last?.role !== "assistant") {
+                    return [
+                      ...msgs,
+                      {
+                        id: crypto.randomUUID(),
+                        role: "assistant" as const,
+                        blocks: [errorBlock],
+                      },
+                    ];
+                  }
+                  updated[updated.length - 1] = {
+                    ...last,
+                    blocks: [...last.blocks, errorBlock],
+                  };
+                  return updated;
+                })(),
+              });
+            }
+            break;
+          case "error":
+            handleNormalizeStreamEvent(
+              { type: "error", message: event.message },
+              set,
+              get,
+            );
+            break;
+        }
+      },
+    });
+
+    const context = buildContext({ budgetName, budgetPath });
+    const fileList = sourceFilenames.map((f) => `- ${f}`).join("\n");
+    const content = `${context}
+Normalize the following source files for import. The files are in the import sources directory (.capy/import/sources/).
+
+Source files:
+${fileList}
+
+For CSV files, use analyze_csv to inspect the format, then define a mapping and use transform_csv.
+For images and PDFs, use the Read tool to view them, then extract transactions manually.`;
+
+    const blocks: ContentBlock[] = sourceFilenames.map((name) => ({
+      type: "file-attachment" as const,
+      name,
+      size: 0,
+      mediaType: "text/plain",
+    }));
+
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      blocks,
+    };
+    const assistantMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      blocks: [],
+    };
+
+    set({
+      normalizeSession: session,
+      normalizeMessages: [userMsg, assistantMsg],
+      phase: "normalizing",
+      hasImportData: false,
+    });
+
+    session.send(content).catch((err) => {
+      handleNormalizeStreamEvent(
+        { type: "error", message: err instanceof Error ? err.message : "Failed to start normalization" },
+        set,
+        get,
+      );
+    });
+  },
+
+  cancelNormalization: () => {
+    get().normalizeSession?.kill();
+    lastNormalizeTextContent = "";
+    set({
+      normalizeSession: null,
+      normalizeMessages: [],
+      phase: "idle",
+      hasImportData: false,
+    });
+  },
+
+  // ── Enrichment ──────────────────────────────────────────────
+  enrichSession: null,
+  isEnriching: false,
+  enrichStatusText: "",
+  onEnrichComplete: null,
+  setOnEnrichComplete: (cb) => set({ onEnrichComplete: cb }),
+
+  startEnrichment: ({ budgetPath, budgetName, mcpServerPath, systemPrompt }) => {
+    get().enrichSession?.kill();
+
+    const session = new CapySession({
+      budgetPath,
+      mcpServerPath,
+      systemPrompt,
+      onEvent: (event: SessionEvent) => {
+        switch (event.type) {
+          case "stdout":
+            for (const streamEvent of parseStreamLine(event.line)) {
+              handleEnrichStreamEvent(streamEvent, set, get);
+            }
+            break;
+          case "stderr":
+            console.debug("[import-store-enrich-stderr]", event.line);
+            break;
+          case "exit":
+            console.debug("[import-store] enrich process exited");
+            if (get().isEnriching) {
+              set({
+                isEnriching: false,
+                enrichStatusText: "Enrichment ended unexpectedly. Progress saved — you can restart.",
+              });
+            }
+            break;
+          case "error":
+            handleEnrichStreamEvent(
+              { type: "error", message: event.message },
+              set,
+              get,
+            );
+            break;
+        }
+      },
+    });
+
+    const context = buildContext({ budgetName, budgetPath });
+    const message = `${context}\nEnrich the imported transactions.`;
+
+    set({
+      enrichSession: session,
+      isEnriching: true,
+      enrichStatusText: "",
+    });
+
+    session.send(message).catch((err) => {
+      handleEnrichStreamEvent(
+        { type: "error", message: err instanceof Error ? err.message : "Failed to start enrichment" },
+        set,
+        get,
+      );
+    });
+  },
+
+  cancelEnrichment: () => {
+    get().enrichSession?.kill();
+    set({
+      enrichSession: null,
+      isEnriching: false,
+      enrichStatusText: "",
+    });
+  },
 }));
+
+// ── Stream event handlers ─────────────────────────────────────
+
+function handleNormalizeStreamEvent(
+  event: StreamEvent,
+  set: (partial: Partial<ImportStore>) => void,
+  get: () => ImportStore,
+) {
+  switch (event.type) {
+    case "content": {
+      set({
+        normalizeMessages: (() => {
+          const msgs = get().normalizeMessages;
+          const updated = [...msgs];
+          const last = updated[updated.length - 1];
+          if (last?.role !== "assistant") return msgs;
+
+          let blocks = [...last.blocks];
+          for (const block of event.blocks) {
+            blocks = appendNormalizeBlock(blocks, block);
+          }
+          updated[updated.length - 1] = { ...last, blocks };
+          return updated;
+        })(),
+      });
+      break;
+    }
+    case "done":
+      // Synchronous transition: normalizing → preview. No async, no race.
+      console.debug("[import-store] normalize done → preview");
+      lastNormalizeTextContent = "";
+      set({ phase: "preview", hasImportData: true });
+      break;
+    case "error":
+      console.debug("[import-store] normalize error:", event.message);
+      lastNormalizeTextContent = "";
+      set({
+        normalizeMessages: (() => {
+          const msgs = get().normalizeMessages;
+          const updated = [...msgs];
+          const last = updated[updated.length - 1];
+          if (last?.role !== "assistant") {
+            return [
+              ...msgs,
+              {
+                id: crypto.randomUUID(),
+                role: "assistant" as const,
+                blocks: [{ type: "text" as const, content: `Error: ${event.message}` }],
+              },
+            ];
+          }
+          updated[updated.length - 1] = {
+            ...last,
+            blocks: [...last.blocks, { type: "text" as const, content: `Error: ${event.message}` }],
+          };
+          return updated;
+        })(),
+      });
+      break;
+  }
+}
+
+function handleEnrichStreamEvent(
+  event: StreamEvent,
+  set: (partial: Partial<ImportStore>) => void,
+  get: () => ImportStore,
+) {
+  switch (event.type) {
+    case "content":
+      for (const block of event.blocks) {
+        if (block.type === "text" && block.content) {
+          const lines = block.content.trim().split("\n");
+          const last = lines[lines.length - 1]?.trim();
+          if (last) set({ enrichStatusText: last });
+        }
+      }
+      break;
+    case "done":
+      console.debug("[import-store] enrich done");
+      set({ isEnriching: false, enrichStatusText: "" });
+      get().onEnrichComplete?.();
+      break;
+    case "error":
+      console.debug("[import-store] enrich error:", event.message);
+      set({ isEnriching: false, enrichStatusText: "" });
+      break;
+  }
+}
