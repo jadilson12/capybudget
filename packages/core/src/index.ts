@@ -135,3 +135,16 @@ export type {
 // CSV transform engine
 export type { TransformResult, TransformError } from "./csv-transform";
 export { transformCsv, serializeImportCsv, parseCurrencyToCents } from "./csv-transform";
+
+// Analytics
+export type { DateRange, CategoryBreakdown, NetWorthPoint, CashFlowPoint, MerchantSpending, TrendPoint, TrendSeries, CategoryTrendsResult } from "./analytics";
+export {
+  filterTransactionsByDateRange,
+  getSpendingByCategory,
+  getIncomeByCategory,
+  getNetWorthOverTime,
+  getPeriodSummary,
+  getCashFlow,
+  getTopMerchants,
+  getCategoryTrends,
+} from "./analytics";

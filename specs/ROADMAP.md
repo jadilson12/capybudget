@@ -199,19 +199,50 @@ Drop a file, intelligence normalizes it, you review and merge.
 
 ---
 
-## Phase 8: Analytics & Budgeting
+## Phase 8: Analytics
 
-- [ ] **8.1 — Analytics**
-  - Spending breakdowns by month, year, custom date range
-  - Category trends over time
+Tab-based analytics dashboard in the Budget section. Six tabs: Spending, Cash Flow, Net Worth, Compare, Merchants, Monthly Budget. Per-tab date controls with period-aware navigation.
 
-- [ ] **8.2 — AI Insights**
+- [x] **8.1 — Analytics Layout**
+  - Tab bar with six analytics views
+  - Per-tab date range state (independent period types and navigation)
+  - Category management accessible via settings dialog
+  - Period selector pills: Month, Quarter, Year, All Time, Custom (calendar picker)
+  - Arrow navigation with data boundary detection
+
+- [x] **8.2 — Expense & Income Breakdown** (Spending tab)
+  - Donut chart + category breakdown list with expense/income switcher
+  - Distinct color palettes: warm tones for expenses, greens for income
+  - Summary strip: total income, total expenses, net
+
+- [x] **8.3 — Net Worth Over Time** (Net Worth tab)
+  - Bar chart (theme-colored, red for negative) or smooth area chart (switcher)
+  - Monthly granularity, defaults to All Time view
+
+- [x] **8.4 — Cash Flow** (Cash Flow tab)
+  - Grouped income vs expense bars per month
+
+- [x] **8.5 — Compare** (Compare tab)
+  - User-driven category selection (Cities-Skylines-style checklist) toggling lines on a multi-line chart
+  - Categories grouped by `CategoryGroup`, each row shows color swatch + period total
+  - Default selection: top 5 by period total; manual selection persists across period navigation
+  - Stable per-session color slots so visual identity doesn't shift on toggle
+
+- [x] **8.6 — Merchants** (Merchants tab)
+  - Top 15 merchants by spend, horizontal bar chart + ranked list
+  - Case-insensitive merchant grouping; transfers and income excluded
+- [ ] **8.7 — AI Insights**
   - Capy builds custom visualizations and analyses on demand
   - Anomaly detection (unusual amounts, spending spikes)
 
-- [ ] **8.3 — Budget**
+---
+
+## Phase 10: Budgeting
+
+- [ ] **10.1 — Monthly Budget**
   - Assign monthly amounts per category
   - Assigned vs. spent tracking
+  - Budget sidebar shows category | assigned | spent | remaining
 
 ## Phase 9: Promo Website ✓
 
