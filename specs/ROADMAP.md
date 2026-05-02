@@ -231,18 +231,11 @@ Tab-based analytics dashboard in the Budget section. Six tabs: Spending, Cash Fl
 - [x] **8.6 — Merchants** (Merchants tab)
   - Top 15 merchants by spend, horizontal bar chart + ranked list
   - Case-insensitive merchant grouping; transfers and income excluded
-- [ ] **8.7 — AI Insights**
+- [ ] **8.7 — AI Insights** *(post-Alpha)*
   - Capy builds custom visualizations and analyses on demand
   - Anomaly detection (unusual amounts, spending spikes)
 
 ---
-
-## Phase 10: Budgeting
-
-- [ ] **10.1 — Monthly Budget**
-  - Assign monthly amounts per category
-  - Assigned vs. spent tracking
-  - Budget sidebar shows category | assigned | spent | remaining
 
 ## Phase 9: Promo Website ✓
 
@@ -252,3 +245,92 @@ Static marketing site at capybudget.app.
 - [x] **9.2 — Landing page** — hero, feature grid, download/demo/GitHub CTAs
 - [x] **9.3 — Privacy policy** — local-first privacy story
 - [x] **9.4 — Docs** — MDX content collection with getting-started guide
+
+---
+
+## Phase 10: Road to Alpha
+
+The path from current state to a public, signed, auto-updating Alpha release. Ordered roughly in the sequence of work — features first, then branding/content, then distribution.
+
+### Features
+
+- [ ] **10.1 — Net Worth account filter**
+  - Per-account `excludeFromNetWorth` flag on `Account` type
+  - Persists via repo; sidebar net worth and Net Worth analytics tab both honor the flag
+
+- [ ] **10.2 — Monthly Budget tab**
+  - Assign monthly amounts per category
+  - Assigned vs. spent tracking
+  - Monthly layout: form/create, edit, sort, date switcher
+  - Budget sidebar row: category | assigned | spent | remaining
+
+- [ ] **10.3 — First-run experience**
+  - On first launch: prompt to create or select a budget
+  - No empty/broken initial state
+
+- [ ] **10.4 — Budget selector polish**
+  - Recent budgets in a scrollable area (no full-app scroll with 3+ budgets)
+  - Prune missing paths from recents automatically
+  - Fix "Reveal in Finder" action
+
+- [ ] **10.5 — Intelligence layer hardening**
+  - Review and tighten Capy instructions
+  - Make specs available to Capy (so it can troubleshoot — e.g. recommend cleaning `.capy/import` on import issues)
+  - Recommend archive over delete for accounts/categories
+  - Recommend new budget folder over reset
+  - Route big-file uploads to the import page instead of inline
+
+- [ ] **10.6 — Import polish**
+  - Guidance for breaking up huge imports
+  - More contrast on the import page
+  - Nicer merge flow: progress bar, page-switching allowed during merge, ensure import directory cleans up
+
+- [ ] **10.7 — Auto backups**
+  - Dated zip files (`yyyy-mm-dd-budget_name.zip`)
+  - Rotation: keep 5 recent + 1 per month (last of month) preserved forever
+
+- [ ] **10.8 — Error state hardening**
+  - Mid-run file deletion recovery
+  - JS crash recovery
+
+- [ ] **10.9 — UI polish pass**
+  - Fix transactions scrollbar (handle too small / hides behind header on long lists)
+  - Bulk-delete progress bar (50+ records)
+  - Cmd-key shortcut overlay (rail nav, transaction, intelligence, budget tabs)
+  - Router back/forward navigation controls
+  - Right-click context menus (accounts, transactions)
+  - Undo/Redo decision: remove or surface (and decide on import undo/redo)
+
+### Branding & content
+
+- [ ] **10.10 — Capy mascot & "Alpha" labeling**
+  - Mascot art in app and on promo site
+  - "Alpha" indicator visible in app
+  - App icon
+
+- [ ] **10.11 — Demo refresh**
+  - Surface analytics in demo presets
+  - Anchor demo dates to current date
+
+- [ ] **10.12 — Promo site polish**
+  - Mascot integrated
+  - "Alpha" tag on site
+  - "How to start your budget" getting-started content
+  - Install instructions
+
+### Distribution
+
+- [ ] **10.13 — DMG: sign, notarize, package**
+  - Apple Developer cert + notarization workflow
+  - Test installed app on a clean Mac
+
+- [ ] **10.14 — Auto-updater**
+  - Tauri updater wired up
+  - Signing key for update artifacts
+  - Update channel served from GitHub Releases
+  - Must ship with v1 — users on the first DMG will get future updates automatically
+
+- [ ] **10.15 — Launch**
+  - Cut `v1.0.0-alpha` release
+  - Publish DMG to GitHub Releases
+  - Promo site live with download link
