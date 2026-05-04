@@ -5,48 +5,12 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { createCsvRepository } from "@capybudget/persistence"
+import {
+  getToolDefinitions,
+  runTool,
+  type ToolContext,
+} from "@capybudget/intelligence"
 import { nodeFileAdapter } from "./node-file-adapter.js"
-import {
-  DATA_TOOLS,
-  handleListAccounts,
-  handleListTransactions,
-  handleListCategories,
-  handleSpendingSummary,
-  handleSearchMerchants,
-} from "./data-tools.js"
-import {
-  MUTATION_TOOLS,
-  handleCreateTransaction,
-  handleUpdateTransaction,
-  handleDeleteTransactions,
-  handleCreateAccount,
-  handleUpdateAccount,
-  handleDeleteAccount,
-  handleArchiveAccount,
-  handleCreateCategory,
-  handleUpdateCategory,
-  handleDeleteCategory,
-  handleArchiveCategory,
-  handleAssignCategories,
-} from "./mutation-tools.js"
-import { RENDER_TOOLS } from "./render-tools.js"
-import {
-  IMPORT_TOOLS,
-  handleReadImportFile,
-  handleWriteImportFile,
-  handleAppendImportFile,
-  handleListImportFiles,
-} from "./import-tools.js"
-import {
-  CSV_TOOLS,
-  handleAnalyzeCsv,
-  handlePreviewTransform,
-  handleTransformCsv,
-  handleAutoEnrich,
-  handleEnrichStats,
-  handleEnrichSample,
-  handleEnrichUpdate,
-} from "./csv-tools.js"
 
 // ── Budget path ──────────────────────────────────────────────────
 
@@ -55,9 +19,15 @@ if (!BUDGET_PATH) {
   throw new Error("BUDGET_PATH environment variable is required")
 }
 
-// ── Repository ───────────────────────────────────────────────────
+// ── Repository + dispatch context ────────────────────────────────
 
 const repo = createCsvRepository(BUDGET_PATH, nodeFileAdapter, { immediate: true })
+
+const dispatchCtx: ToolContext = {
+  repo,
+  fileAdapter: nodeFileAdapter,
+  budgetPath: BUDGET_PATH,
+}
 
 // ── Server setup ─────────────────────────────────────────────────
 
@@ -67,97 +37,20 @@ const server = new Server(
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [...DATA_TOOLS, ...MUTATION_TOOLS, ...RENDER_TOOLS, ...IMPORT_TOOLS, ...CSV_TOOLS],
+  // Single source of truth — `getToolDefinitions()` returns the full
+  // tool surface (data, mutation, import, csv, read_file, render).
+  // External agents (Claude Desktop, Cursor) see the same tools the
+  // app's API adapters dispatch in-process.
+  tools: getToolDefinitions(),
 }))
 
-// ── Mutation tool dispatch ───────────────────────────────────────
-
-const MUTATION_HANDLERS: Record<
-  string,
-  (r: typeof repo, args: Record<string, unknown>) => Promise<string>
-> = {
-  create_transaction: (r, a) => handleCreateTransaction(r, a),
-  update_transaction: (r, a) => handleUpdateTransaction(r, a),
-  delete_transactions: (r, a) => handleDeleteTransactions(r, a),
-  create_account: (r, a) => handleCreateAccount(r, a),
-  update_account: (r, a) => handleUpdateAccount(r, a),
-  delete_account: (r, a) => handleDeleteAccount(r, a),
-  archive_account: (r, a) => handleArchiveAccount(r, a),
-  create_category: (r, a) => handleCreateCategory(r, a),
-  update_category: (r, a) => handleUpdateCategory(r, a),
-  delete_category: (r, a) => handleDeleteCategory(r, a),
-  archive_category: (r, a) => handleArchiveCategory(r, a),
-  assign_categories: (r, a) => handleAssignCategories(r, a),
-}
-
-// ── Import tool dispatch ────────────────────────────────────────
-
-const IMPORT_HANDLERS: Record<
-  string,
-  (budgetPath: string, args: Record<string, unknown>) => Promise<string>
-> = {
-  read_import_file: (p, a) => handleReadImportFile(p, a),
-  write_import_file: (p, a) => handleWriteImportFile(p, a),
-  append_import_file: (p, a) => handleAppendImportFile(p, a),
-  list_import_files: (p) => handleListImportFiles(p),
-  analyze_csv: (p, a) => handleAnalyzeCsv(p, a),
-  preview_transform: (p, a) => handlePreviewTransform(p, a),
-  transform_csv: (p, a) => handleTransformCsv(p, a),
-  enrich_stats: (p) => handleEnrichStats(p),
-  enrich_sample: (p, a) => handleEnrichSample(p, a),
-  enrich_update: (p, a) => handleEnrichUpdate(p, a),
-  auto_enrich: (p) => handleAutoEnrich(p, repo),
-}
+// ── Tool dispatch ────────────────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
-  // Render tools are no-ops — the frontend intercepts the tool_use event
-  if (name.startsWith("render_")) {
-    return { content: [{ type: "text", text: "Rendered." }] }
-  }
-
   try {
-    let text: string
-
-    // Check mutation tools first
-    const mutationHandler = MUTATION_HANDLERS[name]
-    if (mutationHandler) {
-      text = await mutationHandler(repo, args ?? {})
-      return { content: [{ type: "text", text }] }
-    }
-
-    // Import tools
-    const importHandler = IMPORT_HANDLERS[name]
-    if (importHandler) {
-      text = await importHandler(BUDGET_PATH, args ?? {})
-      return { content: [{ type: "text", text }] }
-    }
-
-    // Data tools
-    switch (name) {
-      case "list_accounts":
-        text = await handleListAccounts(repo)
-        break
-      case "list_transactions":
-        text = await handleListTransactions(repo, args ?? {})
-        break
-      case "list_categories":
-        text = await handleListCategories(repo)
-        break
-      case "spending_summary":
-        text = await handleSpendingSummary(repo, args ?? {})
-        break
-      case "search_merchants":
-        text = await handleSearchMerchants(repo, args ?? {})
-        break
-      default:
-        return {
-          content: [{ type: "text", text: `Unknown tool: ${name}` }],
-          isError: true,
-        }
-    }
-
+    const text = await runTool(name, args ?? {}, dispatchCtx)
     return { content: [{ type: "text", text }] }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

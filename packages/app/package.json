@@ -9,10 +9,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
     "@capybudget/core": "*",
     "@capybudget/intelligence": "*",
     "@capybudget/persistence": "*",
     "@tanstack/react-virtual": "^3.13.23",
+    "openai": "^6.35.0",
     "recharts": "^3.8.1"
   },
   "devDependencies": {

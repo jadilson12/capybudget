@@ -22,9 +22,7 @@ import {
   type ChatMessage,
   type ContentBlock,
 } from "@capybudget/intelligence"
-import { serializeConversation } from "@/services/serialize-conversation"
-
-const CONTEXT_MAX_CHARS = 5000
+import type { BudgetRepository, FileAdapter } from "@capybudget/persistence"
 
 interface UseCapySessionOptions {
   budgetPath: string
@@ -32,6 +30,10 @@ interface UseCapySessionOptions {
   mcpServerPath: string
   customInstructions?: string
   onDataChanged?: () => void
+  /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
+  repo?: BudgetRepository
+  /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
+  fileAdapter?: FileAdapter
 }
 
 interface UseCapySessionReturn {
@@ -46,9 +48,9 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const hadMutationsRef = useRef(false)
   const lastTextContentRef = useRef("")
-  const sessionInterruptedRef = useRef(false)
 
-  // Keep a ref to messages for use in sendMessage without stale closures
+  // Keep a ref to messages for use in sendMessage / stopStreaming without
+  // stale closures.
   const messagesRef = useRef(messages)
   useEffect(() => {
     messagesRef.current = messages
@@ -168,7 +170,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
 
       lifecycle.createSession(systemPrompt)
     }
-    return lifecycle.sessionRef.current!
+    return lifecycle.sessionRef.current
   }, [lifecycle])
 
   const sendMessage = useCallback(
@@ -184,23 +186,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       const imageFiles = allFiles.filter(isImageAttachment)
       const attachmentText = formatAttachments(allFiles)
 
-      // If recovering from an interrupted session, forward conversation context
-      let enrichedText: string
-      if (sessionInterruptedRef.current && messagesRef.current.length > 0) {
-        const prevContext = serializeConversation(messagesRef.current, CONTEXT_MAX_CHARS)
-        enrichedText = [
-          context,
-          "[Previous conversation — session was interrupted by user]",
-          prevContext,
-          "[Session was interrupted. This is a fresh session. The user may want to continue the conversation — pick up where you left off or ask for clarification if needed.]",
-          "",
-          text,
-        ].join("\n")
-        sessionInterruptedRef.current = false
-      } else {
-        enrichedText = `${context}\n${text}`
-      }
-
+      let enrichedText = `${context}\n${text}`
       if (attachmentText) {
         enrichedText += "\n\n" + attachmentText
       }
@@ -248,6 +234,17 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       lastTextContentRef.current = ""
 
       const session = ensureSession()
+      if (!session) {
+        // Intelligence is unconfigured (or the chosen provider isn't
+        // available). Surface a single-turn error message and bail —
+        // Round 4 will replace this with a proper empty-state CTA.
+        lifecycle.dispatchStreamEvent({
+          type: "error",
+          message:
+            "Capy is not configured. Open settings to pick an AI provider.",
+        })
+        return
+      }
       session.send(content).catch((err) => {
         lifecycle.dispatchStreamEvent({
           type: "error",
@@ -259,10 +256,15 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   )
 
   const stopStreaming = useCallback(() => {
-    lifecycle.sessionRef.current?.stop()
+    const session = lifecycle.sessionRef.current
+    session?.stop()
+    // Hand the chat history to the adapter so Claude CLI can synthesize
+    // a `[Previous conversation]` recovery prefix on its next send.
+    // API adapters keep their own messages array and treat this as a
+    // no-op (the method is optional on the interface).
+    session?.markInterrupted?.(messagesRef.current)
     lifecycle.setIsStreaming(false)
     lastTextContentRef.current = ""
-    sessionInterruptedRef.current = true
 
     // Replace empty in-flight assistant bubble or append separator
     const interruptBlock = { type: "text" as const, content: "Session interrupted. Send a message to continue." }
@@ -290,7 +292,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     setMessages([])
     hadMutationsRef.current = false
     lastTextContentRef.current = ""
-    sessionInterruptedRef.current = false
   }, [lifecycle])
 
   return { messages, isStreaming: lifecycle.isStreaming, sendMessage, stopStreaming, newChat }

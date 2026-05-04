@@ -1,13 +1,14 @@
 import { create } from "zustand";
-import { CapySession } from "@/services/capy-session";
-import { parseStreamLine } from "@/services/capy-stream";
+import { createSession } from "@/services/create-session";
 import {
   buildContext,
+  type CapySession,
   type ChatMessage,
   type ContentBlock,
-  type SessionEvent,
+  type MessageContent,
   type StreamEvent,
 } from "@capybudget/intelligence";
+import type { BudgetRepository, FileAdapter } from "@capybudget/persistence";
 
 /**
  * Import store — single source of truth for import UI state.
@@ -45,10 +46,16 @@ interface ImportStore {
 
   startNormalization: (opts: {
     budgetPath: string;
-    budgetName: string;
     mcpServerPath: string;
     systemPrompt: string;
+    /** Pre-built multimodal payload from the import screen — text
+     *  instructions plus image/PDF attachments encoded as base64. */
+    initialMessage: MessageContent;
+    /** File names that were attached, for the user-message
+     *  `file-attachment` chips in the import UI. */
     sourceFilenames: string[];
+    repo?: BudgetRepository;
+    fileAdapter?: FileAdapter;
   }) => void;
   cancelNormalization: () => void;
 
@@ -62,6 +69,8 @@ interface ImportStore {
     budgetName: string;
     mcpServerPath: string;
     systemPrompt: string;
+    repo?: BudgetRepository;
+    fileAdapter?: FileAdapter;
   }) => void;
   cancelEnrichment: () => void;
   onEnrichComplete: (() => void) | null;
@@ -110,78 +119,67 @@ export const useImportStore = create<ImportStore>((set, get) => ({
   normalizeSession: null,
   normalizeMessages: [],
 
-  startNormalization: ({ budgetPath, budgetName, mcpServerPath, systemPrompt, sourceFilenames }) => {
+  startNormalization: ({
+    budgetPath,
+    mcpServerPath,
+    systemPrompt,
+    initialMessage,
+    sourceFilenames,
+    repo,
+    fileAdapter,
+  }) => {
     get().normalizeSession?.kill();
     lastNormalizeTextContent = "";
 
-    const session = new CapySession({
+    const session = createSession({
       budgetPath,
       mcpServerPath,
       systemPrompt,
-      onEvent: (event: SessionEvent) => {
-        switch (event.type) {
-          case "stdout":
-            for (const streamEvent of parseStreamLine(event.line)) {
-              handleNormalizeStreamEvent(streamEvent, set, get);
+      repo,
+      fileAdapter,
+      onEvent: (event: StreamEvent) => {
+        handleNormalizeStreamEvent(event, set, get);
+      },
+      // Claude-CLI-only: subprocess died unexpectedly. API adapters
+      // never invoke this — they have no process to die.
+      onExit: () => {
+        console.debug("[import-store] normalize process exited");
+        if (get().phase !== "normalizing") return;
+        lastNormalizeTextContent = "";
+        const errorBlock: ContentBlock = {
+          type: "text" as const,
+          content:
+            "The normalization process ended unexpectedly. You can try again by canceling and restarting.",
+        };
+        set({
+          normalizeMessages: (() => {
+            const msgs = get().normalizeMessages;
+            const updated = [...msgs];
+            const last = updated[updated.length - 1];
+            if (last?.role !== "assistant") {
+              return [
+                ...msgs,
+                {
+                  id: crypto.randomUUID(),
+                  role: "assistant" as const,
+                  blocks: [errorBlock],
+                },
+              ];
             }
-            break;
-          case "stderr":
-            console.debug("[import-store-stderr]", event.line);
-            break;
-          case "exit":
-            console.debug("[import-store] normalize process exited");
-            if (get().phase === "normalizing") {
-              lastNormalizeTextContent = "";
-              const errorBlock: ContentBlock = {
-                type: "text" as const,
-                content: "The normalization process ended unexpectedly. You can try again by canceling and restarting.",
-              };
-              set({
-                normalizeMessages: (() => {
-                  const msgs = get().normalizeMessages;
-                  const updated = [...msgs];
-                  const last = updated[updated.length - 1];
-                  if (last?.role !== "assistant") {
-                    return [
-                      ...msgs,
-                      {
-                        id: crypto.randomUUID(),
-                        role: "assistant" as const,
-                        blocks: [errorBlock],
-                      },
-                    ];
-                  }
-                  updated[updated.length - 1] = {
-                    ...last,
-                    blocks: [...last.blocks, errorBlock],
-                  };
-                  return updated;
-                })(),
-              });
-            }
-            break;
-          case "error":
-            handleNormalizeStreamEvent(
-              { type: "error", message: event.message },
-              set,
-              get,
-            );
-            break;
-        }
+            updated[updated.length - 1] = {
+              ...last,
+              blocks: [...last.blocks, errorBlock],
+            };
+            return updated;
+          })(),
+        });
       },
     });
 
-    const context = buildContext({ budgetName, budgetPath });
-    const fileList = sourceFilenames.map((f) => `- ${f}`).join("\n");
-    const content = `${context}
-Normalize the following source files for import. The files are in the import sources directory (.capy/import/sources/).
-
-Source files:
-${fileList}
-
-For CSV files, use analyze_csv to inspect the format, then define a mapping and use transform_csv.
-For images and PDFs, use the Read tool to view them, then extract transactions manually.`;
-
+    // The screen builds `initialMessage` (text + multimodal blocks for
+    // images/PDFs). It's passed through verbatim — image/PDF support
+    // is identical across all three providers because it rides on the
+    // initial message rather than on a Read tool.
     const blocks: ContentBlock[] = sourceFilenames.map((name) => ({
       type: "file-attachment" as const,
       name,
@@ -207,7 +205,20 @@ For images and PDFs, use the Read tool to view them, then extract transactions m
       hasImportData: false,
     });
 
-    session.send(content).catch((err) => {
+    if (!session) {
+      handleNormalizeStreamEvent(
+        {
+          type: "error",
+          message:
+            "Capy is not configured. Open settings to pick an AI provider.",
+        },
+        set,
+        get,
+      );
+      return;
+    }
+
+    session.send(initialMessage).catch((err) => {
       handleNormalizeStreamEvent(
         { type: "error", message: err instanceof Error ? err.message : "Failed to start normalization" },
         set,
@@ -234,40 +245,35 @@ For images and PDFs, use the Read tool to view them, then extract transactions m
   onEnrichComplete: null,
   setOnEnrichComplete: (cb) => set({ onEnrichComplete: cb }),
 
-  startEnrichment: ({ budgetPath, budgetName, mcpServerPath, systemPrompt }) => {
+  startEnrichment: ({
+    budgetPath,
+    budgetName,
+    mcpServerPath,
+    systemPrompt,
+    repo,
+    fileAdapter,
+  }) => {
     get().enrichSession?.kill();
 
-    const session = new CapySession({
+    const session = createSession({
       budgetPath,
       mcpServerPath,
       systemPrompt,
-      onEvent: (event: SessionEvent) => {
-        switch (event.type) {
-          case "stdout":
-            for (const streamEvent of parseStreamLine(event.line)) {
-              handleEnrichStreamEvent(streamEvent, set, get);
-            }
-            break;
-          case "stderr":
-            console.debug("[import-store-enrich-stderr]", event.line);
-            break;
-          case "exit":
-            console.debug("[import-store] enrich process exited");
-            if (get().isEnriching) {
-              set({
-                isEnriching: false,
-                enrichStatusText: "Enrichment ended unexpectedly. Progress saved — you can restart.",
-              });
-            }
-            break;
-          case "error":
-            handleEnrichStreamEvent(
-              { type: "error", message: event.message },
-              set,
-              get,
-            );
-            break;
-        }
+      repo,
+      fileAdapter,
+      onEvent: (event: StreamEvent) => {
+        handleEnrichStreamEvent(event, set, get);
+      },
+      // Claude-CLI-only: subprocess died unexpectedly. API adapters
+      // never invoke this — they have no process to die.
+      onExit: () => {
+        console.debug("[import-store] enrich process exited");
+        if (!get().isEnriching) return;
+        set({
+          isEnriching: false,
+          enrichStatusText:
+            "Enrichment ended unexpectedly. Progress saved — you can restart.",
+        });
       },
     });
 
@@ -279,6 +285,19 @@ For images and PDFs, use the Read tool to view them, then extract transactions m
       isEnriching: true,
       enrichStatusText: "",
     });
+
+    if (!session) {
+      handleEnrichStreamEvent(
+        {
+          type: "error",
+          message:
+            "Capy is not configured. Open settings to pick an AI provider.",
+        },
+        set,
+        get,
+      );
+      return;
+    }
 
     session.send(message).catch((err) => {
       handleEnrichStreamEvent(

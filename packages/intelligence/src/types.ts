@@ -14,9 +14,16 @@ export type CliImageContent = {
   type: "image"
   source: { type: "base64"; media_type: string; data: string }
 }
+/** Document content — used for PDF imports under Anthropic / Claude CLI.
+ *  OpenAI's chat.completions doesn't accept PDF input; the import flow
+ *  surfaces a "switch provider" banner before we'd ever try. */
+export type CliDocumentContent = {
+  type: "document"
+  source: { type: "base64"; media_type: string; data: string }
+}
 export type MessageContent =
   | string
-  | Array<CliTextContent | CliImageContent>
+  | Array<CliTextContent | CliImageContent | CliDocumentContent>
 
 // ── Content block types (UI rendering) ──────────────────────────
 
@@ -76,12 +83,4 @@ export interface ChatMessage {
 export type StreamEvent =
   | { type: "content"; blocks: ContentBlock[] }
   | { type: "done" }
-  | { type: "error"; message: string }
-
-// ── Session event types ─────────────────────────────────────────
-
-export type SessionEvent =
-  | { type: "stdout"; line: string }
-  | { type: "stderr"; line: string }
-  | { type: "exit"; code: number | null }
   | { type: "error"; message: string }

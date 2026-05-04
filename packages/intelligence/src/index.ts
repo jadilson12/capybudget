@@ -3,6 +3,7 @@ export type {
   FileAttachment,
   CliTextContent,
   CliImageContent,
+  CliDocumentContent,
   MessageContent,
   MessageRole,
   TextBlock,
@@ -14,11 +15,29 @@ export type {
   ContentBlock,
   ChatMessage,
   StreamEvent,
-  SessionEvent,
 } from "./types"
 
 // Session interface
 export type { CapySessionOptions, CapySession } from "./session"
+
+// Provider config
+export {
+  DEFAULT_INTELLIGENCE_CONFIG,
+} from "./config"
+export type {
+  IntelligenceConfig,
+  IntelligenceProvider,
+} from "./config"
+
+// Session factory
+export { createIntelligenceSession } from "./factory"
+export type {
+  CreateSessionDeps,
+  AdapterConstructors,
+  SessionOptions,
+  ClaudeCliAdapterOptions,
+  ApiAdapterOptions,
+} from "./factory"
 
 // Prompt
 export { SYSTEM_PROMPT, buildContext } from "./prompt"
@@ -32,8 +51,52 @@ export {
   MAX_TOTAL_ATTACHMENT_SIZE,
 } from "./attachments"
 
-// Tool metadata
-export { MUTATION_TOOL_NAMES } from "./tools"
+// Tool layer — definitions, dispatch, handlers, and metadata
+export {
+  // Definitions
+  DATA_TOOL_DEFS,
+  MUTATION_TOOL_DEFS,
+  IMPORT_TOOL_DEFS,
+  CSV_TOOL_DEFS,
+  READ_FILE_TOOL_DEF,
+  RENDER_TOOL_DEFS,
+  MUTATION_TOOL_NAMES,
+  getToolDefinitions,
+  // Dispatch
+  runTool,
+  isDispatchTool,
+  // Handlers (re-exported for transports / tests that use them directly)
+  handleListAccounts,
+  handleListTransactions,
+  handleListCategories,
+  handleSpendingSummary,
+  handleSearchMerchants,
+  handleCreateTransaction,
+  handleUpdateTransaction,
+  handleDeleteTransactions,
+  handleCreateAccount,
+  handleUpdateAccount,
+  handleDeleteAccount,
+  handleArchiveAccount,
+  handleCreateCategory,
+  handleUpdateCategory,
+  handleDeleteCategory,
+  handleArchiveCategory,
+  handleAssignCategories,
+  handleReadImportFile,
+  handleWriteImportFile,
+  handleAppendImportFile,
+  handleListImportFiles,
+  handleAnalyzeCsv,
+  handlePreviewTransform,
+  handleTransformCsv,
+  handleAutoEnrich,
+  handleEnrichStats,
+  handleEnrichSample,
+  handleEnrichUpdate,
+  handleReadFile,
+} from "./tools"
+export type { ToolDefinition, ToolContext } from "./tools"
 
 // Import prompt
 export { IMPORT_SYSTEM_PROMPT } from "./import-prompt"
