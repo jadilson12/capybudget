@@ -117,7 +117,7 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
     <>
       {/* Floating bar */}
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-        <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/95 backdrop-blur-sm shadow-xl px-4 py-2.5">
+        <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/95 backdrop-blur-sm shadow-overlay px-4 py-2.5">
           {/* Summary */}
           <div className="flex items-center gap-3 border-r border-border/40 pr-3">
             <span className="text-sm font-medium tabular-nums">
@@ -177,14 +177,15 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
           </DropdownMenu>
 
           {/* Dismiss */}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={onClear}
-            className="ml-1 text-muted-foreground/60 hover:text-foreground transition-colors"
+            className="ml-1 text-muted-foreground/60"
             aria-label="Clear selection"
           >
-            <X className="h-4 w-4" />
-          </button>
+            <X className="size-4" />
+          </Button>
         </div>
       </div>
 
