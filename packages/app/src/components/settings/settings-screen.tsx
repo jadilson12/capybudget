@@ -187,7 +187,7 @@ function ProviderSection() {
           <ProviderRadio
             value={OFF_FORM_VALUE}
             label="Off"
-            description="Capy is disabled. Pick a provider above to enable AI features."
+            description="Capy is disabled. Pick a provider below to enable AI features."
           />
           <ProviderRadio
             value="claude-cli"

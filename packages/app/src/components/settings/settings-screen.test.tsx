@@ -105,7 +105,7 @@ describe("SettingsScreen", () => {
     // The Off label is the first option and matches the default config.
     expect(
       screen.getByText(
-        "Capy is disabled. Pick a provider above to enable AI features.",
+        "Capy is disabled. Pick a provider below to enable AI features.",
       ),
     ).toBeInTheDocument()
   })

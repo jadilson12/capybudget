@@ -292,8 +292,8 @@ The path from current state to a public, signed, auto-updating Alpha release. Or
   - Review and tighten Capy instructions
   - Make specs available to Capy (so it can troubleshoot — e.g. recommend cleaning `.capy/import` on import issues)
   - Recommend archive over delete for accounts/categories
-  - Recommend new budget folder over reset
-  - Route big-file uploads to the import page instead of inline
+  - Recommend new budget folder over budget reset
+  - Route big-file uploads to the import page instead of in-chat
 
 - [ ] **10.6 — Import polish**
   - Guidance for breaking up huge imports
