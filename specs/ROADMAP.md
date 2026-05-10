@@ -259,7 +259,7 @@ The path from current state to a public, signed, auto-updating Alpha release. Or
   - Persists via repo.
   - Sidebar net worth and Net Worth analytics tab both honor the flag
 
-- [ ] **10.2 — Monthly Budget tab**
+- [x] **10.2 — Monthly Budget tab**
   - **Tracking model.** `assigned` field on the Category (integer cents | null). `null` (empty CSV cell) = untracked. Any number, including `0`, = tracked at that monthly amount. The act of assigning *is* the act of opting a category into tracking — there is no second flag. Assigned is a single piece of mutable current-state: changing Rent from `350000` to `400000` updates every past, current, and future month at once. No per-month history.
   - **Schema bump v2 → v3.** Add `assigned` column to `categories.csv`. Forward-compatible CSV parse (missing column → `null`), matching the v1 → v2 pattern. Update DATA_MODEL.md migration history.
   - **Period.** Month only — Quarter/Year/All Time/Custom do not apply. `< March 2026 >` arrow nav. The pill cluster still renders on the right with a single, always-active `Month` pill so the date row matches the layout of every other tab.
@@ -270,17 +270,11 @@ The path from current state to a public, signed, auto-updating Alpha release. Or
   - **Untracked row styling.** Dimmed text, "not tracked" placeholder in the progress column, em-dash in remaining. Still visible (unless filtered) so the user has one click to opt in.
   - **Progress bar states.** Green (well under), gold (close — e.g. ≥80% of assigned), red with overshoot tail (over). For a tracked-at-zero category, any spend renders red.
 
-- [ ] **10.3 — First-run experience**
-  - On first launch: prompt to create or select a budget
-  - No empty/broken initial state
-
+- [x] **10.3 — First-run experience**
 - [x] **10.4 — Budget selector polish**
-  - Visual redesign: room background, glassmorphic card, shared BudgetTile (recents + demo presets), capybudget.app footer link
-  - UX: split into "New budget" / "Open existing…" with forgiving routing — empty → bootstrap, has budget.json → open, non-empty no-budget → modal error with retry
-  - Service hardening: `inspectFolder()` helper, `bootstrapBudget` no-clobber guard, `findMissingBudgetPaths()`
-  - Recent budgets list capped at ~176px and scrollable
-  - Prune missing recents automatically on welcome-screen mount
-  - Friendly "this folder no longer exists" error with auto-cleanup of stale recents
+  - Redesign budget selector
+  - Recent budgets list
+  - Prune missing recents automatically
   - Reveal in Finder fixed (Tauri `shell.open` validator now allows local paths)
   - Demo welcome adopts the same shell with three preset tiles using new capy art
 
@@ -290,7 +284,11 @@ The path from current state to a public, signed, auto-updating Alpha release. Or
   - `/settings` route + provider radio + per-provider config + connection test
   - Imports work end-to-end on every provider (multimodal images / PDFs in the initial message)
 
-- [ ] **10.5b — Intelligence layer hardening**
+- [ ] **10.5b — Intelligence layer UX redesign**
+  - Slide out chat UX
+  - Apply new design
+
+- [ ] **10.5c — Intelligence layer hardening**
   - Review and tighten Capy instructions
   - Make specs available to Capy (so it can troubleshoot — e.g. recommend cleaning `.capy/import` on import issues)
   - Recommend archive over delete for accounts/categories
