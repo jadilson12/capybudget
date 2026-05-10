@@ -1,4 +1,4 @@
-import { exists, readTextFile, writeTextFile, mkdir } from "@tauri-apps/plugin-fs";
+import { exists, readTextFile, writeTextFile, readDir } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import type { BudgetMeta, Category } from "@capybudget/core";
 import { DEFAULT_CATEGORIES } from "@capybudget/core";
@@ -7,6 +7,41 @@ import { migrateBudgetFolder } from "./budget-migrations";
 
 export const SCHEMA_VERSION = 3;
 const BUDGET_FILE = "budget.json";
+
+export interface FolderInfo {
+  hasBudget: boolean;
+  isEmpty: boolean;
+  itemCount: number;
+}
+
+/** Inspect a folder: check for budget.json and count total entries. */
+export async function inspectFolder(folderPath: string): Promise<FolderInfo> {
+  const metaPath = await join(folderPath, BUDGET_FILE);
+  const hasBudget = await exists(metaPath);
+  const entries = await readDir(folderPath);
+  return {
+    hasBudget,
+    isEmpty: entries.length === 0,
+    itemCount: entries.length,
+  };
+}
+
+/** Given a list of folder paths, return the subset whose `budget.json` no
+ *  longer exists. Used at app launch to prune dead recents. Errors per-path
+ *  (e.g. permission denied, folder unmounted) count as "missing". */
+export async function findMissingBudgetPaths(paths: string[]): Promise<string[]> {
+  const checks = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        const metaPath = await join(path, BUDGET_FILE);
+        return { path, exists: await exists(metaPath) };
+      } catch {
+        return { path, exists: false };
+      }
+    }),
+  );
+  return checks.filter((c) => !c.exists).map((c) => c.path);
+}
 
 /** Detect a budget folder, run any pending schema migrations, and return the
  *  (possibly updated) BudgetMeta. Returns null if the folder is not a budget. */
@@ -27,7 +62,19 @@ export async function detectBudget(folderPath: string): Promise<BudgetMeta | nul
   return meta;
 }
 
+const PROTECTED_FILES = ["budget.json", "categories.csv", "accounts.csv", "transactions.csv"];
+
+/** Bootstrap a new budget in a folder the caller has already validated as
+ *  empty (via inspectFolder). The PROTECTED_FILES guard below is defensive
+ *  — it catches races and any future caller that skips inspection. */
 export async function bootstrapBudget(folderPath: string, name: string): Promise<BudgetMeta> {
+  for (const file of PROTECTED_FILES) {
+    const filePath = await join(folderPath, file);
+    if (await exists(filePath)) {
+      throw new Error(`Cannot create budget: "${file}" already exists in this folder.`);
+    }
+  }
+
   const now = new Date().toISOString();
   const meta: BudgetMeta = {
     schemaVersion: SCHEMA_VERSION,
@@ -36,9 +83,6 @@ export async function bootstrapBudget(folderPath: string, name: string): Promise
     createdAt: now,
     lastModified: now,
   };
-
-  // Ensure directory exists
-  await mkdir(folderPath, { recursive: true }).catch(() => {});
 
   // Write budget.json
   const metaPath = await join(folderPath, BUDGET_FILE);
