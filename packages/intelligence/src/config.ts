@@ -4,13 +4,18 @@
  * Persisted by the app via @tauri-apps/plugin-store. v1 keeps API
  * keys in this same blob — see specs/INTELLIGENCE_PROVIDERS.md
  * "Open Question 1" for the rationale.
+ *
+ * `provider: null` is the "AI features disabled" state — first-run
+ * default, and what users pick when they want Capy quiet without
+ * uninstalling. The settings UI presents this as an "Off" radio
+ * label, but on disk and in code it's `null` — the standard
+ * absence value.
  */
 
-export type IntelligenceProvider = "claude-cli" | "anthropic" | "openai"
+export type IntelligenceProvider = "claude-cli" | "anthropic" | "openai" | null
 
 export interface IntelligenceConfig {
-  /** null when the user has not yet picked a provider. */
-  provider: IntelligenceProvider | null
+  provider: IntelligenceProvider
   anthropic: { apiKey: string; model: string }
   openai: { apiKey: string; model: string }
 }

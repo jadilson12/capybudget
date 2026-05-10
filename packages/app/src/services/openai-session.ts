@@ -34,6 +34,7 @@
 
 import OpenAI from "openai"
 import {
+  buildRenderToolMap,
   runTool,
   getToolDefinitions,
   type ApiAdapterOptions,
@@ -57,22 +58,9 @@ function getOpenAiTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
   }))
 }
 
-/** Render-tool name → ContentBlock builder. Mirrors the dispatch in
- *  `claude-cli-stream.ts`'s `RENDER_TOOL_MAP`. */
-const RENDER_TOOL_MAP: Record<string, (input: Record<string, unknown>) => ContentBlock | null> = {
-  render_table: (input) => {
-    if (!Array.isArray(input.headers) || !Array.isArray(input.rows)) return null
-    return { type: "table", headers: input.headers, rows: input.rows }
-  },
-  render_bar_chart: (input) => {
-    if (typeof input.title !== "string" || !Array.isArray(input.data)) return null
-    return { type: "bar-chart", title: input.title, data: input.data }
-  },
-  render_donut_chart: (input) => {
-    if (typeof input.title !== "string" || !Array.isArray(input.data)) return null
-    return { type: "donut-chart", title: input.title, data: input.data }
-  },
-}
+/** Render-tool name → ContentBlock builder. Shared with every adapter
+ *  via `buildRenderToolMap()` so the contract lives in one place. */
+const RENDER_TOOL_MAP = buildRenderToolMap()
 
 function toolUseToContentBlock(name: string, input: Record<string, unknown>): ContentBlock | null {
   const renderFn = RENDER_TOOL_MAP[name]
@@ -82,11 +70,12 @@ function toolUseToContentBlock(name: string, input: Record<string, unknown>): Co
 
 /** Convert the app's MessageContent (CLI-style — string or text/image/
  *  document blocks) into an OpenAI user message. Documents (PDFs) are
- *  unsupported on chat.completions — the import UI gates against
- *  attaching them when this provider is selected, so reaching this code
- *  path with a `document` block is unexpected. We drop the block and
- *  emit a text note in its place so the model can still respond
- *  coherently rather than fail with a cryptic SDK error. */
+ *  unsupported on chat.completions: we drop the block and replace it
+ *  with a text note describing what happened so the model can respond
+ *  coherently to the user (e.g. "I can't read PDFs here — could you
+ *  paste the contents or share a CSV?") rather than fail with a
+ *  cryptic SDK error. This makes provider divergence the adapter's
+ *  responsibility; callers attach PDF blocks uniformly. */
 function toOpenAiUserContent(
   content: MessageContent,
 ): OpenAI.Chat.Completions.ChatCompletionUserMessageParam["content"] {
@@ -98,7 +87,7 @@ function toOpenAiUserContent(
     if (block.type === "document") {
       return {
         type: "text",
-        text: "[PDF attachment skipped — OpenAI's chat API doesn't accept PDFs. Switch to Anthropic or Claude Code for PDF imports.]",
+        text: "[The user attached a PDF document, but this model cannot read PDFs directly. Ask the user to share the contents another way — paste as text, export to CSV, or share a screenshot of the relevant page.]",
       }
     }
     return {
@@ -248,8 +237,9 @@ export class OpenAiSession implements CapySession {
 
       // ── Per-stream state ──────────────────────────────────────
       // Text deltas are not cumulative; accumulate locally and emit
-      // cumulative `content` events so prefix-detection text-merging
-      // downstream keeps working unchanged.
+      // `content` events carrying the full cumulative blocks array so
+      // consumers can replace the trailing assistant message's blocks
+      // wholesale on every tick.
       let accumulatedText = ""
       const completedBlocks: ContentBlock[] = []
       let currentTextDraftIndex: number | null = null

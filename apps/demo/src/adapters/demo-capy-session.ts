@@ -90,9 +90,10 @@ export class CapySession {
   }
 
   /** Cumulative-blocks emitter shared by all simulators. The real
-   *  adapters emit `StreamEvent.content` with a fresh array each time;
-   *  the demo accumulates blocks and re-emits the full list so
-   *  prefix-detection text-merging downstream behaves identically. */
+   *  adapters emit `StreamEvent.content` with the complete blocks
+   *  array on every tick; the demo accumulates locally and re-emits
+   *  the full snapshot so consumers can replace the trailing
+   *  assistant message's blocks wholesale (no deduplication needed). */
   private emit(blocks: ContentBlock[]): void {
     if (this.cancelled) return;
     this.onEvent({ type: "content", blocks: [...blocks] });
@@ -223,7 +224,7 @@ export class CapySession {
     if (this.cancelled) return;
 
     const closingText =
-      "This is a demo — AI features require the Capy Budget desktop app with Claude CLI installed. Download it to get personalized insights, spending analysis, and natural-language budget management.";
+      "This is a demo — AI features require the Capy Budget desktop app. Download it to get personalized insights, spending analysis, and natural-language budget management.";
     const words = closingText.split(" ");
     let accumulated = "";
     const textBlockIndex = blocks.length;

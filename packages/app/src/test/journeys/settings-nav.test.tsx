@@ -26,7 +26,7 @@ beforeEach(() => {
 const TIMEOUT = 15_000;
 
 describe("Settings navigation", () => {
-  it("clicking the gear icon in the budget shell navigates to /settings", async () => {
+  it("clicking the gear icon at the bottom of the navigation rail navigates to /settings", async () => {
     const { user } = await renderApp({
       seed: { accounts: [], categories: [], transactions: [] },
     });
@@ -34,7 +34,7 @@ describe("Settings navigation", () => {
       expect(screen.getByRole("heading", { name: "All Accounts" })).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("link", { name: "Settings" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();

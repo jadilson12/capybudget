@@ -6,10 +6,18 @@
  * - Handles session restart on crash or "New Chat"
  * - Detects mutation tool calls and notifies for cache invalidation
  * - On stop: forwards conversation context to the next session
+ *
+ * Stream contract: every adapter emits `StreamEvent.content` with the
+ * **complete cumulative blocks array** for the current assistant turn —
+ * never deltas. The hook replaces the trailing assistant message's
+ * blocks wholesale on each event, so non-text blocks (tool-activity,
+ * charts, attachments) never duplicate.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useSessionLifecycle } from "@/hooks/use-session-lifecycle"
+import { mergeStreamContent } from "@/hooks/merge-stream-content"
+import { useIntelligenceStore } from "@/stores/intelligence-store"
 import {
   buildContext,
   formatAttachments,
@@ -47,7 +55,6 @@ interface UseCapySessionReturn {
 export function useCapySession(opts: UseCapySessionOptions): UseCapySessionReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const hadMutationsRef = useRef(false)
-  const lastTextContentRef = useRef("")
 
   // Keep a ref to messages for use in sendMessage / stopStreaming without
   // stale closures.
@@ -61,35 +68,12 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     (event: StreamEvent, ctx) => {
       switch (event.type) {
         case "content": {
-          setMessages((prev) => {
-            const updated = [...prev]
-            const last = updated[updated.length - 1]
-            if (last?.role !== "assistant") return prev
-
-            const blocks = [...last.blocks]
-
-            for (const block of event.blocks) {
-              if (block.type === "text") {
-                const prevText = lastTextContentRef.current
-                if (prevText && block.content.startsWith(prevText)) {
-                  const lastTextIdx = blocks.findLastIndex((b) => b.type === "text")
-                  if (lastTextIdx >= 0) {
-                    blocks[lastTextIdx] = block
-                  } else {
-                    blocks.push(block)
-                  }
-                } else {
-                  blocks.push(block)
-                }
-                lastTextContentRef.current = block.content
-              } else {
-                blocks.push(block)
-              }
-            }
-
-            updated[updated.length - 1] = { ...last, blocks }
-            return updated
-          })
+          // Adapters emit the complete cumulative blocks array on
+          // every event — `mergeStreamContent` replaces the trailing
+          // assistant message's blocks wholesale. The pre-Phase-10.5b
+          // append-each-block path duplicated tool cards, charts, and
+          // attachments on every cumulative tick (demo regression).
+          setMessages((prev) => mergeStreamContent(prev, event.blocks))
 
           for (const block of event.blocks) {
             if (block.type === "tool-activity" && MUTATION_TOOL_NAMES.has(block.tool)) {
@@ -102,7 +86,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
 
         case "done":
           ctx.setIsStreaming(false)
-          lastTextContentRef.current = ""
           if (hadMutationsRef.current) {
             hadMutationsRef.current = false
             ctx.optsRef.current.onDataChanged?.()
@@ -112,7 +95,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
         case "error":
           ctx.setIsStreaming(false)
           hadMutationsRef.current = false
-          lastTextContentRef.current = ""
           setMessages((prev) => {
             const updated = [...prev]
             const last = updated[updated.length - 1]
@@ -142,7 +124,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     // onExit — process crashed unexpectedly, append recovery message
     () => {
       hadMutationsRef.current = false
-      lastTextContentRef.current = ""
       setMessages((prev) => [
         ...prev,
         {
@@ -172,6 +153,32 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     }
     return lifecycle.sessionRef.current
   }, [lifecycle])
+
+  // When the user changes provider or swaps the model within a
+  // provider, tear down any running session so the next message goes
+  // to the freshly-configured adapter. Without this, `ensureSession()`
+  // would short-circuit on the still-populated `sessionRef` and route
+  // user messages to the previous adapter (e.g. an old Claude CLI
+  // subprocess after switching to Anthropic), or to a session running
+  // against the previous model.
+  const provider = useIntelligenceStore((s) => s.config.provider)
+  const anthropicModel = useIntelligenceStore((s) => s.config.anthropic.model)
+  const openaiModel = useIntelligenceStore((s) => s.config.openai.model)
+  // Single "session signature" — any change to provider or the model
+  // for the active provider should rebuild the session.
+  const sessionSignature =
+    provider === "anthropic"
+      ? `anthropic:${anthropicModel}`
+      : provider === "openai"
+        ? `openai:${openaiModel}`
+        : (provider ?? "off") // "claude-cli" / null carry no model — stable string signature
+  const prevSignatureRef = useRef(sessionSignature)
+  useEffect(() => {
+    if (prevSignatureRef.current !== sessionSignature) {
+      lifecycle.cancel()
+      prevSignatureRef.current = sessionSignature
+    }
+  }, [sessionSignature, lifecycle])
 
   const sendMessage = useCallback(
     (text: string, files?: FileAttachment[]) => {
@@ -231,7 +238,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       setMessages((prev) => [...prev, userMsg, assistantMsg])
       lifecycle.setIsStreaming(true)
       hadMutationsRef.current = false
-      lastTextContentRef.current = ""
 
       const session = ensureSession()
       if (!session) {
@@ -264,7 +270,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     // no-op (the method is optional on the interface).
     session?.markInterrupted?.(messagesRef.current)
     lifecycle.setIsStreaming(false)
-    lastTextContentRef.current = ""
 
     // Replace empty in-flight assistant bubble or append separator
     const interruptBlock = { type: "text" as const, content: "Session interrupted. Send a message to continue." }
@@ -291,7 +296,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     lifecycle.cancel()
     setMessages([])
     hadMutationsRef.current = false
-    lastTextContentRef.current = ""
   }, [lifecycle])
 
   return { messages, isStreaming: lifecycle.isStreaming, sendMessage, stopStreaming, newChat }

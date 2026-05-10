@@ -5,16 +5,14 @@
  *
  * Lifecycle:
  *   1. Initial state mirrors DEFAULT_INTELLIGENCE_CONFIG (provider null).
- *   2. `hydrate()` loads from disk on first call. If no file exists yet
- *      AND Claude Code is detected on the host, provider auto-defaults
- *      to "claude-cli" and is persisted — so existing devs running the
- *      app don't see a regression in Round 1.
+ *   2. `hydrate()` loads from disk on first call. First-run default is
+ *      `null` — users explicitly pick a provider to enable AI features
+ *      so they're never surprised by quota usage.
  *   3. Setters write through to disk; UI subscribers see the new value
  *      synchronously.
  *
  * The loader is mockable: tests inject a stub via `_setStoreLoaderForTests`
- * and a stub Claude detector via `_setClaudeDetectorForTests` to avoid
- * touching Tauri at all.
+ * to avoid touching Tauri.
  */
 
 import { create } from "zustand"
@@ -24,7 +22,6 @@ import {
   type IntelligenceConfig,
   type IntelligenceProvider,
 } from "@capybudget/intelligence"
-import { detectClaudeCli } from "@/services/claude-cli-detect"
 
 const STORE_FILE = "intelligence-config.json"
 const STORE_KEY = "config"
@@ -51,7 +48,6 @@ async function tauriBackend(): Promise<ConfigStoreBackend> {
 }
 
 let backendLoader: () => Promise<ConfigStoreBackend> = tauriBackend
-let claudeDetector: () => Promise<boolean> = detectClaudeCli
 
 /** Test-only: swap the persistence backend (no Tauri in unit tests). */
 export function _setStoreLoaderForTests(
@@ -60,17 +56,9 @@ export function _setStoreLoaderForTests(
   backendLoader = loader
 }
 
-/** Test-only: swap the Claude CLI detector. */
-export function _setClaudeDetectorForTests(
-  detector: () => Promise<boolean>,
-): void {
-  claudeDetector = detector
-}
-
 /** Test-only: restore real loaders. */
 export function _resetStoreForTests(): void {
   backendLoader = tauriBackend
-  claudeDetector = detectClaudeCli
 }
 
 // ── Store ────────────────────────────────────────────────────────
@@ -82,7 +70,7 @@ interface IntelligenceStore {
   /** Load config from disk. Idempotent — repeat calls are no-ops. */
   hydrate(): Promise<void>
 
-  setProvider(p: IntelligenceProvider | null): void
+  setProvider(p: IntelligenceProvider): void
   setAnthropicKey(k: string): void
   setAnthropicModel(m: string): void
   setOpenAiKey(k: string): void
@@ -112,17 +100,16 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
 
     hydratePromise = (async () => {
       const b = await loadBackend()
-      let loaded = await b.get()
+      const loaded = await b.get()
 
-      // First-run: no config on disk yet. If Claude Code is installed,
-      // default to claude-cli so existing devs don't see a regression.
+      // First-run: no config on disk yet. Default to null — users
+      // explicitly pick a provider so they're never surprised by
+      // quota usage.
       if (!loaded) {
-        const hasClaude = await claudeDetector().catch(() => false)
-        loaded = {
-          ...DEFAULT_INTELLIGENCE_CONFIG,
-          provider: hasClaude ? "claude-cli" : null,
-        }
-        await b.set(loaded)
+        const seeded: IntelligenceConfig = { ...DEFAULT_INTELLIGENCE_CONFIG }
+        await b.set(seeded)
+        set({ config: seeded, hydrated: true })
+        return
       }
 
       set({ config: loaded, hydrated: true })

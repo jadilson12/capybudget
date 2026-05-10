@@ -30,7 +30,7 @@ function makeOptions(): SessionOptions {
 }
 
 describe("createIntelligenceSession", () => {
-  it("returns null when provider is unconfigured", () => {
+  it("returns null when provider is null", () => {
     const session = createIntelligenceSession({
       config: { ...DEFAULT_INTELLIGENCE_CONFIG, provider: null },
       adapters: {},
