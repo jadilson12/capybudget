@@ -441,4 +441,62 @@ describe("AnthropicSession", () => {
     const blocks = messages[0].content as Array<{ type: string }>
     expect(blocks.map((b) => b.type)).toEqual(["text", "image", "document"])
   })
+
+  it("terminates with a budget-exhausted error after SESSION_TOOL_CALL_BUDGET tool calls", async () => {
+    const { SESSION_TOOL_CALL_BUDGET } = await import("@capybudget/intelligence")
+    // Queue (budget + 1) turns, each firing one tool. The session must
+    // stop processing once the counter ticks past the budget.
+    for (let i = 0; i < SESSION_TOOL_CALL_BUDGET + 1; i++) {
+      queueTurn({
+        toolUses: [{ id: `tu-${i}`, name: "list_accounts", input: {} }],
+        stop_reason: "tool_use",
+      })
+    }
+    mockRunTool.mockResolvedValue("ok")
+
+    const { session, events } = makeSession()
+    await session.send("Loop forever")
+
+    // Real tool dispatch should run exactly SESSION_TOOL_CALL_BUDGET times.
+    expect(mockRunTool).toHaveBeenCalledTimes(SESSION_TOOL_CALL_BUDGET)
+
+    // The session emits a budget-exhausted error and stops.
+    const errorEvent = events.find((e) => e.type === "error")
+    expect(errorEvent?.message).toMatch(/budget exhausted/i)
+    expect(events.some((e) => e.type === "done")).toBe(false)
+  })
+
+  it("restart() resets the budget counter so the next session starts fresh", async () => {
+    const { SESSION_TOOL_CALL_BUDGET } = await import("@capybudget/intelligence")
+    // Burn the entire budget on the first send.
+    for (let i = 0; i < SESSION_TOOL_CALL_BUDGET + 1; i++) {
+      queueTurn({
+        toolUses: [{ id: `tu-${i}`, name: "list_accounts", input: {} }],
+        stop_reason: "tool_use",
+      })
+    }
+    mockRunTool.mockResolvedValue("ok")
+
+    const { session } = makeSession()
+    await session.send("Loop forever")
+    expect(mockRunTool).toHaveBeenCalledTimes(SESSION_TOOL_CALL_BUDGET)
+
+    // After restart, the counter should be back at zero — a single
+    // tool call must NOT trip the cap immediately.
+    await session.restart()
+    mockRunTool.mockClear()
+    queueTurn({
+      toolUses: [{ id: "tu-post-restart", name: "list_accounts", input: {} }],
+      stop_reason: "tool_use",
+    })
+    queueTurn({
+      textDeltas: ["Done."],
+      stop_reason: "end_turn",
+    })
+
+    await session.send("After restart")
+
+    // Exactly one fresh tool dispatch, no budget-exhausted error this time.
+    expect(mockRunTool).toHaveBeenCalledTimes(1)
+  })
 })

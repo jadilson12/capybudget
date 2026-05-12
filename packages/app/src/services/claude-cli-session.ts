@@ -28,6 +28,7 @@ import { Command, type Child } from "@tauri-apps/plugin-shell"
 import { writeTextFile } from "@tauri-apps/plugin-fs"
 import { tempDir, join as joinPath } from "@tauri-apps/api/path"
 import {
+  SESSION_TOOL_CALL_BUDGET,
   type StreamEvent,
   type ClaudeCliAdapterOptions,
   type MessageContent,
@@ -108,10 +109,19 @@ export class ClaudeCliSession implements CapySession {
       this.budgetPath,
       "--setting-sources",
       "",
+      // Runaway-loop backstop. The CLI tracks turns itself and exits
+      // with an `error_max_turns` result line when the cap trips; the
+      // parser turns that into a StreamEvent.error.
+      "--max-turns",
+      String(SESSION_TOOL_CALL_BUDGET),
     ])
 
     command.stdout.on("data", (line: string) => {
       for (const event of parseStreamLine(line)) {
+        // An error event means the CLI is shutting itself down (e.g.
+        // `--max-turns` tripped). Mark the teardown as deliberate so
+        // the close handler skips the unexpected-death onExit path.
+        if (event.type === "error") this.killed = true
         this.onEvent(event)
       }
     })
@@ -222,6 +232,7 @@ export class ClaudeCliSession implements CapySession {
     await this.kill()
     this.sessionId = crypto.randomUUID()
     this.interruptedMessages = null
+    // `killed` is reset by the next `spawn()`.
   }
 
   /** Kill the process. */

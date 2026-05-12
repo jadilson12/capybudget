@@ -18,7 +18,7 @@ Supported input: CSV, images, PDFs.
 
 ### 2. Normalization (Intelligence)
 
-Start triggers intelligence. The agent reads the same custom instructions as the Capy chat (`capy-instructions.md`).
+Start triggers intelligence. The agent reads its own `import-instructions.md` from the budget folder — kept separate from the chat's `capy-instructions.md` so import-tuning notes don't bleed into chat behavior and vice versa.
 
 The agent converts dropped files into a uniform internal CSV format, stored in `.capy/import/transactions.csv`. Two normalization paths:
 
@@ -31,14 +31,19 @@ OpenAI's chat.completions API doesn't accept PDF input. When the OpenAI provider
 
 | Column | Type | Description |
 |---|---|---|
-| `id` | string | Unique row identifier |
-| `date` | string | Transaction date |
-| `description` | string | Raw description from source |
-| `amount` | integer | Amount in cents |
+| `id` | string | Sequential: `imp-1`, `imp-2`, `imp-3`, … |
+| `date` | string | `YYYY-MM-DD` |
+| `description` | string | Raw description from source — preserved exactly as-is |
+| `amount` | integer | Cents. Negative = expense, positive = income |
 | `type` | string | `expense`, `income`, or `transfer` |
 | `sourceAccount` | string | Raw account string from source file — not yet matched |
 | `sourceCategory` | string | Raw category string from source file — not yet matched |
-| `memo` | string | Additional notes |
+| `memo` | string | Additional notes or reference numbers |
+| `merchant` | string | Clean human-readable merchant name. Set during normalize for unambiguous receipt/PDF cases, otherwise filled during enrichment |
+| `accountId` | string | Budget account UUID — set during enrichment |
+| `targetAccountId` | string | Target account UUID for transfers — set during enrichment |
+| `categoryId` | string | Budget category UUID. Set during normalize when confident, otherwise filled during enrichment |
+| `categoryConfidence` | string | `high` for unambiguous matches, `low` for inferred. Set alongside `categoryId` |
 
 `sourceAccount` and `sourceCategory` are raw strings extracted from the file. They are resolved to budget entities later during enrichment.
 
@@ -73,18 +78,30 @@ The agent also resolves `sourceAccount` and `sourceCategory` strings to existing
 
 Enrichment uses primitive tools instead of bulk CSV read/write:
 
-1. `auto_enrich` runs first — code-based matching (sourceCategory to categories, sourceAccount to accounts, description to merchant). Uses score-based fuzzy matching for categories.
+1. `auto_enrich` runs first — code-based matching (sourceCategory to categories, sourceAccount to accounts, transfer-target resolution). It intentionally does **not** populate `merchant` — the raw description is the wrong value for the cleaned merchant slot, and at merge time `description` already maps to `Transaction.note` while `merchant` is reserved for the cleaned name the model fills in.
 2. `enrich_stats` gives the AI a compact progress summary.
 3. `enrich_sample` returns ~20 evenly-spaced rows needing work — representative cross-section, not just the first rows.
-4. `enrich_update` applies bulk SET WHERE updates (like SQL UPDATE). Supports single or array of WHERE conditions (AND logic).
+4. `enrich_update` applies bulk SET WHERE updates (like SQL UPDATE). Supports single or array of WHERE conditions (AND logic). Returns **per-field counts** (set / skipped-as-already-populated) so the model can tell exactly what landed. Validates `categoryId` against the budget's real category UUIDs.
 
-The AI works in a size-aware REPL loop: for small imports (~30 rows), it processes individually; for large imports, it pattern-matches in bulk — check stats, read a sample, apply a pattern, repeat. It also cleans merchant names (stripping bank prefixes, location suffixes, store numbers). Enrichment results are cached in memory across tool calls for efficiency.
+The session works idempotently: step 0 is always `enrich_stats`; if coverage is already complete (which is common after a small CSV or a receipt extracted directly during normalize), the session reports the work is done and stops. Otherwise the AI works in a REPL loop — check stats, read a sample, apply a pattern in parallel (merchant + categoryId in the same `enrich_update`), repeat until two consecutive update calls produce zero changes or coverage is complete. Per-session tool-call budget (100, defined in the intelligence layer) is a runaway backstop.
 
 ### 5. Review & Merge
 
 User reviews enriched data, makes final corrections.
 
 Merge pumps processed data into the budget database — creating mapped entities and bulk-inserting transactions. Unmapped sources are created as new entities.
+
+**Field mapping at merge time:**
+
+| Import CSV column | `Transaction` field |
+|---|---|
+| `description` (raw bank/receipt text) | `note` — concatenated with `memo` via `" — "` if both present |
+| `memo` | `note` (combined with `description`) |
+| `merchant` (cleaned by enrichment) | `merchant` |
+| `categoryId` | `categoryId` |
+| `accountId` (resolved at merge) | `accountId` |
+
+The `merchant` field on `Transaction` is reserved for the cleaned, human-readable name. The raw description belongs in `note`. Enrichment never copies one into the other.
 
 ## Import State
 
@@ -139,10 +156,10 @@ Code-based normalization — AI defines the mapping, code processes all rows:
 
 Primitive tools for AI-assisted enrichment — small samples in, bulk updates out:
 
-- `auto_enrich` — score-based matching (sourceCategory→categories, sourceAccount→accounts, description→merchant)
+- `auto_enrich` — score-based matching (sourceCategory→categories, sourceAccount→accounts, transfer-target resolution). Leaves `merchant` empty for the model to fill with cleaned names.
 - `enrich_stats` — compact progress summary (how many rows enriched, how many remain)
 - `enrich_sample` — ~20 evenly-spaced CSV rows needing work (representative sampling)
-- `enrich_update` — bulk SET WHERE (like SQL UPDATE) for merchant, category, account, confidence. Supports array of WHERE conditions (AND logic). Only sets empty fields.
+- `enrich_update` — bulk SET WHERE (like SQL UPDATE) for merchant, category, account, confidence. Supports array of WHERE conditions (AND logic). Only sets empty fields. Returns per-field counts (set vs skipped). Validates `categoryId` against real budget category UUIDs.
 
 ### Budget query tools
 
@@ -155,7 +172,7 @@ Deterministic functions querying budget data, available during both normalizatio
 
 ## Custom Instructions
 
-The import screen exposes an editor for `capy-instructions.md` — the same file used by the Capy overlay. Users can tune agent behavior before running normalization or enrichment.
+The import screen exposes an editor for `import-instructions.md` in the budget folder — separate from the chat overlay's `capy-instructions.md` so import-specific notes don't bleed into chat behavior. Users can tune agent behavior here before running normalization or enrichment.
 
 ## Design Principles
 

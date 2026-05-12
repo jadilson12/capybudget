@@ -1,9 +1,11 @@
 /**
  * Single source of truth for tool descriptors that the model sees —
- * data, mutation, import, csv, read_file, and render tools all live
- * here. Both the MCP server and the in-process API adapters consume
- * these.
+ * data, mutation, import, csv, read_file, read_spec, and render tools
+ * all live here. Both the MCP server and the in-process API adapters
+ * consume these.
  */
+
+import { SPEC_FILENAMES } from "../specs.generated"
 
 // ── Data tool schemas ────────────────────────────────────────────
 
@@ -293,6 +295,42 @@ export const MUTATION_TOOL_DEFS = [
       required: ["id"],
     },
   },
+  {
+    name: "unarchive_account",
+    description:
+      "Unarchive an account so it reappears in the sidebar and net-worth calculations.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "Account ID to unarchive",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "set_net_worth_exclusions",
+    description:
+      "Toggle whether one or more accounts are excluded from Net Worth. `exclude: true` excludes them; `exclude: false` includes them. Archived accounts are skipped (the flag is meaningless until they're unarchived).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        accountIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "Account IDs to update",
+        },
+        exclude: {
+          type: "boolean",
+          description: "true = exclude from Net Worth, false = include",
+        },
+      },
+      required: ["accountIds", "exclude"],
+    },
+  },
 
   // ── Categories ──────────────────────────────────────────────────
   {
@@ -366,6 +404,40 @@ export const MUTATION_TOOL_DEFS = [
       required: ["id"],
     },
   },
+  {
+    name: "unarchive_category",
+    description: "Unarchive a category so it reappears in the UI.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "Category ID to unarchive",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "set_category_budget",
+    description:
+      "Set the monthly budget target for a category. `assigned` is in integer cents (e.g. 20000 = $200/month). Pass `null` to mark the category as untracked. `0` is a distinct, valid value (tracked at zero).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        categoryId: {
+          type: "string",
+          description: "Category ID",
+        },
+        assigned: {
+          type: ["integer", "null"],
+          description:
+            "Monthly target in cents. null = untracked. 0 = tracked at zero.",
+        },
+      },
+      required: ["categoryId", "assigned"],
+    },
+  },
 
   // ── Bulk ────────────────────────────────────────────────────────
   {
@@ -386,6 +458,43 @@ export const MUTATION_TOOL_DEFS = [
         },
       },
       required: ["transactionIds", "categoryId"],
+    },
+  },
+  {
+    name: "bulk_update_transactions",
+    description:
+      "Apply account, date, and/or merchant changes to many transactions in one call. At least one field in `set` is required. Transfers are skipped for account and merchant changes (transfers move money — they have no merchant, and an account move would orphan the pair). Date changes apply to whatever IDs are passed; if you want both legs of a transfer to shift, include both IDs.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        transactionIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "Transaction IDs to update",
+        },
+        set: {
+          type: "object",
+          description:
+            "Fields to change. At least one of accountId, date, merchant must be present.",
+          properties: {
+            accountId: {
+              type: "string",
+              description: "New account ID. Validated against existing accounts.",
+            },
+            date: {
+              type: "string",
+              description:
+                "New date in YYYY-MM-DD format. The existing time-of-day is preserved on each transaction.",
+            },
+            merchant: {
+              type: "string",
+              description: "New merchant name.",
+            },
+          },
+        },
+      },
+      required: ["transactionIds", "set"],
     },
   },
 ] as const
@@ -524,7 +633,7 @@ export const CSV_TOOL_DEFS = [
   {
     name: "auto_enrich",
     description:
-      "Code-based enrichment: (1) maps sourceCategory → budget categories, (2) matches sourceAccount → budget accounts, (3) sets merchant from description for empty merchants. Call this FIRST.",
+      "Code-based enrichment: (1) maps sourceCategory → budget categories, (2) matches sourceAccount → budget accounts, (3) resolves transfer target accounts. Leaves merchant empty for the model to fill with cleaned names. Runs automatically when an enrichment session starts. Call it again only if you suspect it didn't run (e.g., after a manual `write_import_file`).",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -561,16 +670,39 @@ export const CSV_TOOL_DEFS = [
   {
     name: "enrich_update",
     description:
-      "Bulk update: set field(s) on all rows matching a condition. Like SQL UPDATE ... WHERE. Only sets empty fields (won't overwrite existing values).",
+      "Bulk update: set field(s) on all rows matching a condition. Like SQL UPDATE ... WHERE. Only sets empty fields (won't overwrite existing values). Returns per-field counts of what was set vs skipped — read this to see exactly what landed.",
     inputSchema: {
       type: "object" as const,
       properties: {
         set: {
           type: "object",
           description:
-            "Fields to set. Keys: merchant, categoryId, categoryConfidence, accountId, targetAccountId. Example: {\"categoryId\": \"uuid\", \"categoryConfidence\": \"low\"}",
+            "Fields to set. Keys: merchant, categoryId, categoryConfidence, accountId, targetAccountId. Example: {\"merchant\": \"Starbucks\", \"categoryId\": \"<uuid>\", \"categoryConfidence\": \"high\"}. categoryId must be a real UUID from list_categories.",
         },
         where: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                field: { type: "string" },
+                equals: { type: "string" },
+                contains: { type: "string" },
+              },
+              required: ["field"],
+            },
+            {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  field: { type: "string" },
+                  equals: { type: "string" },
+                  contains: { type: "string" },
+                },
+                required: ["field"],
+              },
+            },
+          ],
           description:
             "Single condition or array of conditions (AND logic). Each: {field, equals?, contains?}. Example: {\"field\": \"description\", \"contains\": \"STARBUCKS\"} or [{\"field\": \"description\", \"contains\": \"AMAZON\"}, {\"field\": \"type\", \"equals\": \"expense\"}]",
         },
@@ -595,6 +727,27 @@ export const READ_FILE_TOOL_DEF = {
         type: "string",
         description:
           "File name relative to the budget folder or import sources folder. Bare filenames resolve against .capy/import/sources/ first, then the budget folder.",
+      },
+    },
+    required: ["filename"],
+  },
+} as const
+
+// ── read_spec ────────────────────────────────────────────────────
+// Bundled spec docs (specs/*.md) — content is generated into
+// specs.generated.ts at build time. Used when capy needs implementation
+// detail beyond what the system prompt already embeds.
+
+export const READ_SPEC_TOOL_DEF = {
+  name: "read_spec",
+  description: `Read one of Capy Budget's design specs. The chat prompt already embeds DATA_MODEL.md and a high-level PRODUCT.md excerpt — reach for this tool when you need deeper detail on architecture, the import pipeline, the intelligence layer internals, or the roadmap. Available files: ${SPEC_FILENAMES.join(", ")}.`,
+  inputSchema: {
+    type: "object" as const,
+    properties: {
+      filename: {
+        type: "string",
+        description: `Spec filename, e.g. 'ARCHITECTURE.md'. Must be one of: ${SPEC_FILENAMES.join(", ")}.`,
+        enum: [...SPEC_FILENAMES],
       },
     },
     required: ["filename"],
@@ -739,6 +892,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     ...IMPORT_TOOL_DEFS,
     ...CSV_TOOL_DEFS,
     READ_FILE_TOOL_DEF,
+    READ_SPEC_TOOL_DEF,
     ...RENDER_TOOL_DEFS,
   ]
 }

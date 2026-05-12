@@ -131,10 +131,11 @@ Single source of truth shared between transports:
 - **Dispatch** — `runTool(name, input, ctx) → string`. The MCP server and the API adapters call this with the same signature. `ToolContext` is `{ repo, fileAdapter, budgetPath }`.
 - **Handlers** — per-tool implementations:
   - **Data tools** — `list_accounts`, `list_transactions`, `list_categories`, `spending_summary`, `search_merchants`
-  - **Mutation tools** — full CRUD for transactions / accounts / categories plus `assign_categories`
+  - **Mutation tools** — full CRUD for transactions / accounts / categories, plus `assign_categories`, `bulk_update_transactions` (account/date/merchant across many rows), `set_category_budget` (monthly target), `unarchive_account` / `unarchive_category` (reverse archive), `set_net_worth_exclusions` (toggle Net Worth inclusion)
   - **Import tools** — `read_import_file`, `write_import_file`, `append_import_file`, `list_import_files` (over `.capy/import/`)
   - **CSV tools** — `analyze_csv`, `preview_transform`, `transform_csv`, `auto_enrich`, `enrich_stats`, `enrich_sample`, `enrich_update`
   - **read_file** — generic budget-folder text reader; mirrors what Claude CLI's built-in `Read` provides natively
+  - **read_spec** — reads one of the app's design docs (`specs/*.md`). Content is bundled at build time into `specs.generated.ts` — no filesystem access, no path resolution surface. Use when capy needs implementation detail beyond what the system prompt already embeds.
   - **Render tools** — no-op on dispatch (return `"Rendered."`); the frontend intercepts the `tool_use` event and emits the corresponding ContentBlock
 
 All filesystem access goes through the `FileAdapter` on the context, so the same handler runs against node fs (MCP server) and Tauri fs (API adapters in the renderer). The `FileAdapter` interface covers core CSV repo ops (read/write/rename/join) plus the import-handler ops (`mkdir`, `exists`, `readDir`, `appendFile`, `remove`, `stat`).
@@ -184,7 +185,7 @@ interface IntelligenceConfig {
 }
 ```
 
-The `/settings` route renders a provider radio + per-provider config (API key, model dropdown, custom-model toggle, test-connection button). First-run defaults to `null` — users must explicitly pick a provider so they're never surprised by quota usage. The radio's "Off" label maps to `null` at the form boundary. Claude Code is still auto-detected via `claude --version` and disabled in the picker if not installed. Configs from a brief window mid-Phase-10.5b that persisted `"off"` are normalized to `null` on load.
+The `/settings` route renders a provider radio + per-provider config (API key, model dropdown, custom-model toggle, test-connection button). First-run defaults to `null` — users must explicitly pick a provider so they're never surprised by quota usage. The radio's "Off" label maps to `null` at the form boundary. Claude Code is still auto-detected via `claude --version` and disabled in the picker if not installed.
 
 When `provider === null`, the Capy overlay shows an empty-state CTA instead of the chat UI.
 
@@ -204,7 +205,7 @@ What did I spend on food this month?
 
 ## Custom Instructions
 
-Users can write custom instructions in `capy-instructions.md` in the budget folder. These compose into the system prompt at session start:
+Users can write custom instructions for the chat assistant in `capy-instructions.md` in the budget folder. These compose into the chat system prompt at session start:
 
 ```
 {SYSTEM_PROMPT}
@@ -213,7 +214,7 @@ Users can write custom instructions in `capy-instructions.md` in the budget fold
 {contents of capy-instructions.md}
 ```
 
-User-provided, takes effect on next session.
+Import sessions read a separate `import-instructions.md` from the same folder — the chat-tuning instructions ("answer in fewer words", "always show charts") rarely overlap with import-tuning instructions ("treat ATM withdrawals as transfers to cash"), so the two surfaces are kept distinct. Each file is user-provided and takes effect on the next session of its respective surface.
 
 ## Custom Commands
 
@@ -230,7 +231,12 @@ Establishes Capy's personality:
 - Concise, direct answers
 - Confirms destructive actions before executing
 
-Includes a complete data model description and tool reference so the AI interprets results correctly.
+The prompt also bakes in two spec files as always-on context so capy understands the app's surface area without having to ask:
+
+- **`DATA_MODEL.md`** — embedded in full. Capy needs the exact schema to interpret tool results and form valid mutations.
+- **`PRODUCT.md`** — curated excerpt (everything above `## Target Platforms`). The deployment/distribution sections are skipped — capy reasons about how the app works, not how it ships.
+
+Both embeds are sourced from `packages/intelligence/src/specs.generated.ts`, which is regenerated on every build by `scripts/generate-specs.ts`. The two spec files carry maintenance-note footers flagging this dependency for human editors. For anything beyond the always-on context — architecture, the import pipeline, the intelligence layer itself, the roadmap — capy calls `read_spec`.
 
 ## Import Sessions
 
@@ -245,11 +251,26 @@ Takes dropped files, detects format, extracts transactions into a uniform CSV. L
 
 ### Enrich
 
-Reads the normalized CSV, identifies merchants, matches accounts, and categorizes transactions using a mix of code-driven helpers (`auto_enrich` does fuzzy category and account matching in one pass) and bulk SQL-UPDATE-style calls (`enrich_update`). Runs automatically after normalization; can be re-triggered manually.
+Reads the normalized CSV, identifies merchants, matches accounts, and categorizes transactions using a mix of code-driven helpers (`auto_enrich` does fuzzy category and account matching in one pass — it intentionally does NOT touch `merchant`, since the raw description is the wrong value for the cleaned-name slot) and bulk SQL-UPDATE-style calls (`enrich_update`). Runs automatically after normalization; can be re-triggered manually.
+
+`enrich_update` returns **per-field counts** of what landed (set vs skipped-as-already-populated). The model uses this signal to know when to stop pattern-matching instead of guessing from a single "Updated N rows" total. It validates `categoryId` against real budget category UUIDs — invented or stale IDs are rejected with a clear error pointing back at `list_categories`.
+
+**Idempotency.** Enrich begins with `enrich_stats`. If coverage is already complete (merchant + category on every non-transfer row), the session reports the work is done and stops without further calls. Pressing enrich on already-enriched data is a fast no-op. Stop conditions are explicit: full coverage, or two consecutive `enrich_update` calls produce zero actual changes, or the per-session tool-call budget is approaching exhaustion.
 
 The `categoryConfidence` field coordinates between AI and user: enrichment writes `"high"` (merchant history match) or `"low"` (keyword inference), and skips rows where confidence is `"high"` (user-confirmed). The UI shows a confidence dot indicator next to each category.
 
 Both sessions use the same `CapySession` interface and the same tool surface — only the system prompt changes.
+
+## Session Tool-Call Budget
+
+Every `CapySession` enforces a per-session cap of **100 tool calls** as a runaway-loop backstop. When exceeded, the session emits a `StreamEvent.error` describing the budget exhaustion and terminates that turn cleanly. The user sees the error and can run again; the budget resets per session.
+
+This is a hard backstop, not the normal path. Idempotent enrichment and well-formed prompts converge in tens of calls even on multi-year imports. The cap exists to bound the failure mode when something goes wrong.
+
+Enforcement varies by adapter:
+
+- **Anthropic / OpenAI** count tool calls inline as they dispatch them. When the cap trips mid-turn, remaining tool_use blocks in the same turn receive a budget-exhausted error result (so the API doesn't see dangling tool_use) and the agentic loop exits without making the next request.
+- **Claude CLI** parses each cumulative assistant snapshot, dedups tool_use IDs into a Set, and kills the subprocess + surfaces the error event when the Set grows past the cap. The CLI can't be told to stop from outside, so termination is the cleanest signal we can give.
 
 ## Per-provider Stop / Restart
 

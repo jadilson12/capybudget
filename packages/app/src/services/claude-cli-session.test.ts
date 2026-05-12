@@ -152,4 +152,43 @@ describe("ClaudeCliSession", () => {
       message: "spawn failed: ENOENT",
     })
   })
+
+  it("passes --max-turns to the CLI as the runaway-loop backstop", async () => {
+    const { SESSION_TOOL_CALL_BUDGET } = await import("@capybudget/intelligence")
+    const { Command } = await import("@tauri-apps/plugin-shell")
+    const { session } = makeSession()
+    await session.send("hi")
+
+    const args = (Command.create as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[]
+    const idx = args.indexOf("--max-turns")
+    expect(idx).toBeGreaterThan(-1)
+    expect(args[idx + 1]).toBe(String(SESSION_TOOL_CALL_BUDGET))
+  })
+
+  it("surfaces an error_max_turns result as an error event and suppresses onExit", async () => {
+    // When `--max-turns` trips, the CLI emits an `error_max_turns`
+    // result line, then exits cleanly. The parser turns the line into
+    // an error event; the session must mark the teardown deliberate so
+    // the close handler doesn't fire the unexpected-death onExit.
+    const { session, events, exitHandler } = makeSession()
+    await session.send("loop forever")
+
+    const handlers = latestHandlers.current!
+    handlers.stdout!(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        is_error: true,
+        errors: ["Reached maximum number of turns (100)"],
+      }),
+    )
+
+    expect(events).toContainEqual({
+      type: "error",
+      message: "Reached maximum number of turns (100)",
+    })
+
+    handlers.close?.({ code: 0 })
+    expect(exitHandler).not.toHaveBeenCalled()
+  })
 })
