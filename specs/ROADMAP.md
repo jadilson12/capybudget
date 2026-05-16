@@ -336,14 +336,21 @@ The path from current state to a public, signed, auto-updating Alpha release. Or
 ### Distribution
 
 - [ ] **10.13 — DMG: sign, notarize, package**
-  - Apple Developer cert + notarization workflow
-  - Test installed app on a clean Mac
+  - Apple Developer cert + notarization workflow ✓ wired in `.github/workflows/release.yml`
+  - Test installed app on a clean Mac (pending — requires Apple Developer secrets in repo)
 
 - [ ] **10.14 — Auto-updater**
-  - Tauri updater wired up
-  - Signing key for update artifacts
-  - Update channel served from GitHub Releases
+  - Tauri updater wired up ✓ (`tauri-plugin-updater`, JS check on app startup)
+  - Signing key for update artifacts — pending: run `npx @tauri-apps/cli signer generate`, paste pubkey into `src-tauri/tauri.conf.json`, add private key + password as repo secrets
+  - Update channel served from GitHub Releases ✓ (`latest.json` at `/releases/latest/download/latest.json`)
   - Must ship with v1 — users on the first DMG will get future updates automatically
+
+- [ ] **10.14b — Bundle MCP server for production Claude Code provider**
+  - Currently Claude Code provider is gated to dev builds (`IS_DIST_BUILD` in `settings-screen.tsx`) because the MCP server is run via `npx tsx <__PROJECT_ROOT__>/packages/mcp/src/server.ts` — paths baked at build time and `tsx` not on user's machine
+  - Bundle `packages/mcp/src/server.ts` into a single JS file (esbuild) → `src-tauri/resources/mcp-server.js`
+  - Add `"resources"` entry in `tauri.conf.json` and resolve at runtime via `resolveResource()`
+  - Spawn via detected/configured `node` path instead of `npx tsx`
+  - Remove the `IS_DIST_BUILD` gate
 
 - [ ] **10.15 — Launch**
   - Cut `v1.0.0-alpha` release
