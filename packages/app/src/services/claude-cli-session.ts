@@ -21,7 +21,8 @@
  * the consumer side only ever sees typed `StreamEvent`s. Process-level
  * events (stderr noise, unexpected exits, spawn failures) are handled
  * here too: stderr is logged at debug, exits route through `onExit`,
- * and spawn errors emit a `StreamEvent.error`.
+ * and spawn errors emit a `StreamEvent.error`. Block accumulation
+ * across the user→done cycle is non-trivial — see `accumulateCycleEvent`.
  */
 
 import { Command, type Child } from "@tauri-apps/plugin-shell"
@@ -29,6 +30,7 @@ import { writeTextFile } from "@tauri-apps/plugin-fs"
 import { tempDir, join as joinPath } from "@tauri-apps/api/path"
 import {
   SESSION_TOOL_CALL_BUDGET,
+  type ContentBlock,
   type StreamEvent,
   type ClaudeCliAdapterOptions,
   type MessageContent,
@@ -53,6 +55,11 @@ export class ClaudeCliSession implements CapySession {
   private killed = false
   /** Set by markInterrupted(); consumed (and cleared) on the next send. */
   private interruptedMessages: readonly ChatMessage[] | null = null
+  // Per-cycle (user→done) content accumulator — see accumulateCycleEvent.
+  private finishedTurns: ContentBlock[] = []
+  private currentTurnId: string | null = null
+  private currentTurnBlocks: ContentBlock[] = []
+  private inProgressTextIndex: number | null = null
 
   constructor(opts: ClaudeCliAdapterOptions) {
     this.budgetPath = opts.budgetPath
@@ -122,7 +129,7 @@ export class ClaudeCliSession implements CapySession {
         // `--max-turns` tripped). Mark the teardown as deliberate so
         // the close handler skips the unexpected-death onExit path.
         if (event.type === "error") this.killed = true
-        this.onEvent(event)
+        this.onEvent(this.accumulateCycleEvent(event))
       }
     })
 
@@ -153,6 +160,8 @@ export class ClaudeCliSession implements CapySession {
     if (!this.child) {
       await this.spawn()
     }
+
+    this.resetCycleAccumulator()
 
     const payload = JSON.stringify({
       type: "user",
@@ -246,5 +255,55 @@ export class ClaudeCliSession implements CapySession {
       }
       this.child = null
     }
+  }
+
+  /**
+   * Stitch delta-style stream-json events into a cumulative cycle.
+   *
+   * The CLI's stream-json is delta-style within one `message.id`: each
+   * event carries only the new block(s), NOT a cumulative snapshot. So
+   * a text event followed by a same-id tool_use event would clobber the
+   * text if we replaced wholesale. Within a turn: text grows the
+   * in-progress text block, anything else appends. A new `message.id`
+   * promotes `currentTurnBlocks` into `finishedTurns` and starts fresh.
+   */
+  private accumulateCycleEvent(event: StreamEvent): StreamEvent {
+    if (event.type === "done" || event.type === "error") {
+      this.resetCycleAccumulator()
+      return event
+    }
+    if (event.type !== "content") return event
+
+    const incomingId = event.messageId
+    if (incomingId !== undefined && incomingId !== this.currentTurnId) {
+      if (this.currentTurnBlocks.length > 0) {
+        this.finishedTurns.push(...this.currentTurnBlocks)
+      }
+      this.currentTurnId = incomingId
+      this.currentTurnBlocks = []
+      this.inProgressTextIndex = null
+    }
+
+    for (const block of event.blocks) {
+      if (block.type === "text" && this.inProgressTextIndex !== null) {
+        this.currentTurnBlocks[this.inProgressTextIndex] = block
+      } else {
+        this.currentTurnBlocks.push(block)
+        this.inProgressTextIndex =
+          block.type === "text" ? this.currentTurnBlocks.length - 1 : null
+      }
+    }
+
+    return {
+      type: "content",
+      blocks: [...this.finishedTurns, ...this.currentTurnBlocks],
+    }
+  }
+
+  private resetCycleAccumulator(): void {
+    this.finishedTurns = []
+    this.currentTurnId = null
+    this.currentTurnBlocks = []
+    this.inProgressTextIndex = null
   }
 }

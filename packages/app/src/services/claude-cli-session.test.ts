@@ -165,6 +165,216 @@ describe("ClaudeCliSession", () => {
     expect(args[idx + 1]).toBe(String(SESSION_TOOL_CALL_BUDGET))
   })
 
+  describe("cross-turn content accumulation", () => {
+    it("accumulates blocks from successive turns into one cumulative cycle", async () => {
+      const { session, events } = makeSession()
+      await session.send("breakdown")
+
+      const handlers = latestHandlers.current!
+
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_turn1",
+            content: [
+              { type: "text", text: "Here's the split:" },
+              {
+                type: "tool_use",
+                name: "mcp__capy__render_donut_chart",
+                input: {
+                  title: "Spending",
+                  data: [{ label: "Food", value: 50 }],
+                },
+              },
+            ],
+          },
+        }),
+      )
+
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_turn2",
+            content: [
+              {
+                type: "tool_use",
+                name: "mcp__capy__render_table",
+                input: {
+                  headers: ["Category", "Amount"],
+                  rows: [["Food", "$50"]],
+                },
+              },
+            ],
+          },
+        }),
+      )
+
+      const lastContent = [...events].reverse().find((e) => e.type === "content")
+      expect(lastContent).toBeTruthy()
+      if (lastContent?.type !== "content") throw new Error("unreachable")
+      const types = lastContent.blocks.map((b) => b.type)
+      expect(types).toEqual(["text", "donut-chart", "table"])
+    })
+
+    it("grows the in-progress text block when same-id text deltas arrive", async () => {
+      const { session, events } = makeSession()
+      await session.send("hi")
+
+      const handlers = latestHandlers.current!
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: { id: "msg_a", content: [{ type: "text", text: "He" }] },
+        }),
+      )
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: { id: "msg_a", content: [{ type: "text", text: "Hello" }] },
+        }),
+      )
+
+      const lastContent = [...events].reverse().find((e) => e.type === "content")
+      if (lastContent?.type !== "content") throw new Error("unreachable")
+      expect(lastContent.blocks).toEqual([{ type: "text", content: "Hello" }])
+    })
+
+    it("preserves text when a same-id tool_use delta follows it", async () => {
+      // Wire format: within one message.id, the CLI emits a text event
+      // then a separate tool_use event whose content does NOT include
+      // the prior text. The accumulator must append, not clobber.
+      const { session, events } = makeSession()
+      await session.send("hi")
+
+      const handlers = latestHandlers.current!
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: { id: "msg_a", content: [{ type: "text", text: "Hello." }] },
+        }),
+      )
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_a",
+            content: [
+              {
+                type: "tool_use",
+                name: "mcp__capy__list_accounts",
+                input: {},
+              },
+            ],
+          },
+        }),
+      )
+
+      const lastContent = [...events].reverse().find((e) => e.type === "content")
+      if (lastContent?.type !== "content") throw new Error("unreachable")
+      expect(lastContent.blocks).toEqual([
+        { type: "text", content: "Hello." },
+        { type: "tool-activity", tool: "list_accounts" },
+      ])
+    })
+
+    it("preserves prior turn when a new message.id starts (delta-style sequence)", async () => {
+      const { session, events } = makeSession()
+      await session.send("breakdown")
+
+      const handlers = latestHandlers.current!
+
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: { id: "msg_t1", content: [{ type: "text", text: "Querying…" }] },
+        }),
+      )
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_t1",
+            content: [
+              {
+                type: "tool_use",
+                name: "mcp__capy__list_transactions",
+                input: {},
+              },
+            ],
+          },
+        }),
+      )
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: { id: "msg_t2", content: [{ type: "text", text: "Here it is:" }] },
+        }),
+      )
+      handlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_t2",
+            content: [
+              {
+                type: "tool_use",
+                name: "mcp__capy__render_table",
+                input: {
+                  headers: ["Category", "Amount"],
+                  rows: [["Food", "$50"]],
+                },
+              },
+            ],
+          },
+        }),
+      )
+
+      const lastContent = [...events].reverse().find((e) => e.type === "content")
+      if (lastContent?.type !== "content") throw new Error("unreachable")
+      const types = lastContent.blocks.map((b) => b.type)
+      expect(types).toEqual(["text", "tool-activity", "text", "table"])
+    })
+
+    it("resets the accumulator between sends so a new cycle starts clean", async () => {
+      const { session, events } = makeSession()
+      await session.send("first")
+
+      const firstHandlers = latestHandlers.current!
+      firstHandlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_t1",
+            content: [{ type: "text", text: "first reply" }],
+          },
+        }),
+      )
+      firstHandlers.stdout!(JSON.stringify({ type: "result" }))
+
+      // Second send — start fresh; previous content must NOT bleed in.
+      events.length = 0
+      await session.send("second")
+      const secondHandlers = latestHandlers.current!
+      secondHandlers.stdout!(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg_t2",
+            content: [{ type: "text", text: "second reply" }],
+          },
+        }),
+      )
+
+      const lastContent = [...events].reverse().find((e) => e.type === "content")
+      if (lastContent?.type !== "content") throw new Error("unreachable")
+      expect(lastContent.blocks).toEqual([
+        { type: "text", content: "second reply" },
+      ])
+    })
+  })
+
   it("surfaces an error_max_turns result as an error event and suppresses onExit", async () => {
     // When `--max-turns` trips, the CLI emits an `error_max_turns`
     // result line, then exits cleanly. The parser turns the line into

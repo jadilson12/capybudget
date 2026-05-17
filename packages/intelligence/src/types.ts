@@ -92,6 +92,11 @@ export interface ChatMessage {
 // ── Stream event types ──────────────────────────────────────────
 
 export type StreamEvent =
-  | { type: "content"; blocks: ContentBlock[] }
+  | {
+      type: "content"
+      blocks: ContentBlock[]
+      /** Per-turn boundary signal from Claude CLI's stream-json. */
+      messageId?: string
+    }
   | { type: "done" }
   | { type: "error"; message: string }

@@ -466,6 +466,48 @@ describe("AnthropicSession", () => {
     expect(events.some((e) => e.type === "done")).toBe(false)
   })
 
+  it("accumulates render blocks across agentic-loop iterations (cumulative cycle)", async () => {
+    queueTurn({
+      textDeltas: ["Here's the split:"],
+      toolUses: [
+        {
+          id: "tu-donut",
+          name: "render_donut_chart",
+          input: {
+            title: "Spending",
+            data: [{ label: "Food", value: 50 }],
+          },
+        },
+      ],
+      stop_reason: "tool_use",
+    })
+    queueTurn({
+      toolUses: [
+        {
+          id: "tu-table",
+          name: "render_table",
+          input: {
+            headers: ["Category", "Amount"],
+            rows: [["Food", "$50"]],
+          },
+        },
+      ],
+      stop_reason: "end_turn",
+    })
+
+    mockRunTool.mockResolvedValue("Rendered.")
+
+    const { session, events } = makeSession()
+    await session.send("Breakdown please")
+
+    const contentEvents = events.filter((e) => e.type === "content")
+    const finalEmit = contentEvents[contentEvents.length - 1]
+    if (finalEmit?.type !== "content") throw new Error("expected content event")
+    const types = finalEmit.blocks.map((b) => b.type)
+    expect(types).toContain("donut-chart")
+    expect(types).toContain("table")
+  })
+
   it("restart() resets the budget counter so the next session starts fresh", async () => {
     const { SESSION_TOOL_CALL_BUDGET } = await import("@capybudget/intelligence")
     // Burn the entire budget on the first send.

@@ -8,11 +8,9 @@
  * in-flight request without leaving dangling `tool_use` blocks (which
  * the API would reject on the next turn).
  *
- * Stream-event shape: this adapter emits `StreamEvent`s directly —
- * `content` blocks carry the **complete cumulative blocks array** for
- * the current assistant turn (never deltas), `done` on turn completion,
- * `error` on failure. Text deltas are accumulated locally so every emit
- * carries a full snapshot the consumer can replace wholesale.
+ * Stream-event shape: `content` emits carry the cumulative blocks for
+ * the whole user→done cycle (accumulator hoisted out of the agentic
+ * loop), so a turn-2 chart never wipes a turn-1 chart.
  *
  * Tauri's webview is a real browser, so the SDK works with
  * `dangerouslyAllowBrowser: true`. The flag is intended to discourage
@@ -175,6 +173,13 @@ export class AnthropicSession implements CapySession {
   private async runAgenticLoop(): Promise<void> {
     const tools = getAnthropicTools()
 
+    // Cumulative across the user→done cycle; survives loop iterations.
+    const completedBlocks: ContentBlock[] = []
+    const emitContent = () => {
+      if (completedBlocks.length === 0) return
+      this.opts.onEvent({ type: "content", blocks: [...completedBlocks] })
+    }
+
     while (true) {
       if (this.killed) return
       if (this.interrupted) return
@@ -192,18 +197,8 @@ export class AnthropicSession implements CapySession {
         { signal: this.abortController.signal },
       )
 
-      // Stream content blocks to the UI as they arrive. Text is
-      // accumulated locally so each emit carries the full cumulative
-      // blocks array — consumers replace the trailing assistant
-      // message's blocks wholesale on every tick.
       let accumulatedText = ""
-      const completedBlocks: ContentBlock[] = []
       let currentTextDraftIndex: number | null = null
-
-      const emitContent = () => {
-        if (completedBlocks.length === 0) return
-        this.opts.onEvent({ type: "content", blocks: [...completedBlocks] })
-      }
 
       stream.on("text", (delta) => {
         accumulatedText += delta

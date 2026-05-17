@@ -1,16 +1,8 @@
 /**
  * Claude CLI stream-json decoder — internal to `ClaudeCliSession`.
- *
- * The CLI emits assistant turns as cumulative JSON lines (each event
- * carries ALL content blocks so far). This module reconstructs the
- * full block list and yields a `StreamEvent` per parsed line. Other
- * adapters (Anthropic, OpenAI) emit `StreamEvent`s directly without
- * roundtripping through the CLI's wire format — so this decoder lives
- * here only to bridge the one provider that actually speaks it.
- *
- * Kept in its own file (rather than inlined in `claude-cli-session.ts`)
- * because the parser is non-trivial and benefits from independent
- * testing.
+ * Stateless: each line is parsed into one or more `StreamEvent`s and
+ * forwarded with the per-turn `message.id`. Accumulation logic lives
+ * in the session (see `accumulateCycleEvent`).
  */
 
 import {
@@ -47,7 +39,9 @@ export function parseStreamLine(line: string): StreamEvent[] {
 
   switch (event.type) {
     case "assistant": {
-      const message = event.message as { content?: Array<Record<string, unknown>> } | undefined
+      const message = event.message as
+        | { id?: string; content?: Array<Record<string, unknown>> }
+        | undefined
       const rawBlocks = message?.content ?? []
       const blocks: ContentBlock[] = []
 
@@ -70,7 +64,10 @@ export function parseStreamLine(line: string): StreamEvent[] {
       }
 
       if (blocks.length > 0) {
-        events.push({ type: "content", blocks })
+        const messageId = typeof message?.id === "string" ? message.id : undefined
+        events.push(
+          messageId ? { type: "content", blocks, messageId } : { type: "content", blocks },
+        )
       }
       break
     }

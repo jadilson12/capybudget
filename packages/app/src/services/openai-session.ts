@@ -13,7 +13,9 @@
  * Mirrors `AnthropicSession`'s shape: same lifecycle (`send`/`stop`/
  * `restart`/`kill`), same `interrupted` flag pattern that drops
  * trailing assistant turns with unmatched `tool_calls` (OpenAI's
- * analogue of unmatched `tool_use`). Emits `StreamEvent`s directly.
+ * analogue of unmatched `tool_use`). `content` emits carry the
+ * cumulative blocks for the whole user→done cycle (accumulator hoisted
+ * out of the agentic loop), so a turn-2 chart never wipes a turn-1.
  *
  * Tauri's webview is a real browser, so the SDK works with
  * `dangerouslyAllowBrowser: true`. The flag is intended to discourage
@@ -214,6 +216,13 @@ export class OpenAiSession implements CapySession {
   private async runAgenticLoop(): Promise<void> {
     const tools = getOpenAiTools()
 
+    // Cumulative across the user→done cycle; survives loop iterations.
+    const completedBlocks: ContentBlock[] = []
+    const emitContent = () => {
+      if (completedBlocks.length === 0) return
+      this.opts.onEvent({ type: "content", blocks: [...completedBlocks] })
+    }
+
     while (true) {
       if (this.killed) return
       if (this.interrupted) return
@@ -240,23 +249,12 @@ export class OpenAiSession implements CapySession {
         { signal: this.abortController.signal },
       )
 
-      // ── Per-stream state ──────────────────────────────────────
-      // Text deltas are not cumulative; accumulate locally and emit
-      // `content` events carrying the full cumulative blocks array so
-      // consumers can replace the trailing assistant message's blocks
-      // wholesale on every tick.
       let accumulatedText = ""
-      const completedBlocks: ContentBlock[] = []
       let currentTextDraftIndex: number | null = null
       // Tool calls stream as deltas keyed by `index`; arguments arrive
       // sliced across many chunks. Parse only after the stream ends.
       const toolAccs = new Map<number, ToolCallAccumulator>()
       let finishReason: string | null = null
-
-      const emitContent = () => {
-        if (completedBlocks.length === 0) return
-        this.opts.onEvent({ type: "content", blocks: [...completedBlocks] })
-      }
 
       for await (const chunk of stream) {
         const choice = chunk.choices[0]
