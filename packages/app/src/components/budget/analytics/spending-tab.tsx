@@ -11,8 +11,19 @@ import {
   getSpendingByCategory,
   getIncomeByCategory,
 } from "@capybudget/core";
-import type { Transaction, Category } from "@capybudget/core";
+import type { Transaction, Category, DateRange } from "@capybudget/core";
 import { ChartSwitcher } from "./chart-switcher";
+import { TransactionsModal } from "@/components/budget/transactions-modal";
+import { TransactionsDrilldownLink } from "@/components/budget/transactions-drilldown-link";
+import type { PeriodType } from "@/stores/analytics-store";
+import { formatRangeLabel } from "./format-range";
+import { getRechartsPayload } from "./recharts-payload";
+import {
+  buildSliceDrilldown,
+  filterForSliceDrilldown,
+  type SliceDrilldown,
+  type SpendingViewMode,
+} from "./spending-drilldown";
 
 // ── Chart colors ──
 
@@ -73,17 +84,25 @@ function PieTooltipContent({
 interface SpendingTabProps {
   transactions: Transaction[];
   categories: Category[];
+  dateRange: DateRange;
+  periodType: PeriodType;
 }
 
-type ViewMode = "expenses" | "income";
+type ViewMode = SpendingViewMode;
 
 const VIEW_OPTIONS: Array<{ value: ViewMode; label: string }> = [
   { value: "expenses", label: "Expenses" },
   { value: "income", label: "Income" },
 ];
 
-export function SpendingTab({ transactions, categories }: SpendingTabProps) {
+export function SpendingTab({
+  transactions,
+  categories,
+  dateRange,
+  periodType,
+}: SpendingTabProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("expenses");
+  const [drilldown, setDrilldown] = useState<SliceDrilldown | null>(null);
 
   const spending = useMemo(
     () => getSpendingByCategory(transactions, categories),
@@ -99,13 +118,30 @@ export function SpendingTab({ transactions, categories }: SpendingTabProps) {
   const palette = viewMode === "expenses" ? EXPENSE_COLORS : INCOME_COLORS;
 
   const chartData = useMemo(
-    () => breakdown.map((s) => ({ name: s.categoryName, value: s.total, percentage: s.percentage })),
+    () =>
+      breakdown.map((s) => ({
+        categoryId: s.categoryId,
+        name: s.categoryName,
+        value: s.total,
+        percentage: s.percentage,
+      })),
     [breakdown],
   );
 
   const emptyMessage = viewMode === "expenses"
     ? "No expenses in this period"
     : "No income in this period";
+
+  // Pre-filtered transactions for the active drilldown — the same `type`
+  // gating `breakdown` produces (expense or income), then by categoryId.
+  const drilldownTransactions = useMemo(
+    () => (drilldown ? filterForSliceDrilldown(transactions, drilldown) : []),
+    [drilldown, transactions],
+  );
+
+  const handleSliceClick = (data: { categoryId: string; name: string }) => {
+    setDrilldown(buildSliceDrilldown(data, viewMode));
+  };
 
   return (
     <div className="space-y-4">
@@ -127,6 +163,11 @@ export function SpendingTab({ transactions, categories }: SpendingTabProps) {
                   outerRadius={140}
                   paddingAngle={2}
                   dataKey="value"
+                  onClick={(e) => {
+                    const data = getRechartsPayload<{ categoryId: string; name: string }>(e);
+                    if (data?.categoryId !== undefined) handleSliceClick(data);
+                  }}
+                  className="cursor-pointer"
                 >
                   {chartData.map((_, i) => (
                     <Cell key={i} fill={palette[i % palette.length]} />
@@ -137,7 +178,10 @@ export function SpendingTab({ transactions, categories }: SpendingTabProps) {
             </ResponsiveContainer>
           </div>
 
-          {/* Breakdown list — grid keeps columns aligned */}
+          {/* Breakdown list — grid keeps columns aligned. The amount in
+           *  the third column is a drilldown link with the same behavior
+           *  as clicking the corresponding pie slice — gives users with
+           *  thin slices a fatter click target. */}
           <div className="grid grid-cols-[auto_auto_auto_auto] gap-x-2.5 gap-y-1.5 items-center pt-2">
             {chartData.map((entry, i) => (
               <div key={entry.name} className="contents text-sm">
@@ -149,7 +193,12 @@ export function SpendingTab({ transactions, categories }: SpendingTabProps) {
                   {entry.name}
                 </span>
                 <span className="tabular-nums text-sm font-medium text-foreground text-right pl-4">
-                  {formatMoney(entry.value)}
+                  <TransactionsDrilldownLink
+                    onClick={() => handleSliceClick(entry)}
+                    ariaLabel={`View ${entry.name} transactions`}
+                  >
+                    {formatMoney(entry.value)}
+                  </TransactionsDrilldownLink>
                 </span>
                 <span className="tabular-nums text-xs text-muted-foreground text-right">
                   {entry.percentage.toFixed(1)}%
@@ -163,6 +212,28 @@ export function SpendingTab({ transactions, categories }: SpendingTabProps) {
           {emptyMessage}
         </p>
       )}
+
+      <TransactionsModal
+        open={drilldown !== null}
+        onOpenChange={(open) => !open && setDrilldown(null)}
+        transactions={drilldownTransactions}
+        lockedFilters={
+          drilldown
+            ? {
+                categoryId: drilldown.categoryId,
+                dateRange: { from: dateRange.start, to: dateRange.end },
+              }
+            : {}
+        }
+        title={drilldown?.categoryName ?? ""}
+        subtitle={
+          drilldown
+            ? `${formatRangeLabel(dateRange, periodType)} · ${drilldownTransactions.length} transaction${
+                drilldownTransactions.length === 1 ? "" : "s"
+              }`
+            : undefined
+        }
+      />
     </div>
   );
 }

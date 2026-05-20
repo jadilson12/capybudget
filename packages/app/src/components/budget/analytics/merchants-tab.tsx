@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -13,8 +13,18 @@ import {
   formatMoneyCompact,
   getTopMerchants,
 } from "@capybudget/core";
-import type { Transaction } from "@capybudget/core";
+import type { Transaction, DateRange } from "@capybudget/core";
 import { useThemeColors } from "./use-theme-colors";
+import { TransactionsModal } from "@/components/budget/transactions-modal";
+import { TransactionsDrilldownLink } from "@/components/budget/transactions-drilldown-link";
+import type { PeriodType } from "@/stores/analytics-store";
+import { formatRangeLabel } from "./format-range";
+import { getRechartsPayload } from "./recharts-payload";
+import {
+  matchesTarget,
+  targetForRow,
+  type MerchantDrilldownTarget,
+} from "./merchant-drilldown";
 
 // ── Tooltip ──
 
@@ -41,13 +51,37 @@ function MerchantTooltipContent({
 
 interface MerchantsTabProps {
   transactions: Transaction[];
+  dateRange: DateRange;
+  periodType: PeriodType;
 }
 
-export function MerchantsTab({ transactions }: MerchantsTabProps) {
+export function MerchantsTab({
+  transactions,
+  dateRange,
+  periodType,
+}: MerchantsTabProps) {
   const merchants = useMemo(
     () => getTopMerchants(transactions, 15),
     [transactions],
   );
+
+  const [drilldown, setDrilldown] = useState<MerchantDrilldownTarget | null>(null);
+
+  // Pre-filter to expenses for this merchant — mirrors getTopMerchants's
+  // grouping (expenses only, case-insensitive whitespace-trimmed equality).
+  const drilldownTransactions = useMemo(() => {
+    if (!drilldown) return [];
+    return transactions.filter(
+      (t) => t.type === "expense" && matchesTarget(t.merchant, drilldown),
+    );
+  }, [drilldown, transactions]);
+
+  /** Open the drilldown for a row of the merchants list. The row's own
+   *  `isUnknown` flag (from `getTopMerchants`) is the source of truth —
+   *  do not compare display strings. */
+  const handleMerchantClick = (row: { merchant: string; isUnknown: boolean }) => {
+    setDrilldown(targetForRow(row));
+  };
 
   const { brandColor } = useThemeColors({
     brandColor: ["--brand", "oklch(0.58 0.14 55)"],
@@ -89,6 +123,13 @@ export function MerchantsTab({ transactions }: MerchantsTabProps) {
             dataKey="total"
             fill={brandColor}
             radius={[0, 4, 4, 0]}
+            onClick={(d) => {
+              const payload = getRechartsPayload<{ merchant?: string; isUnknown?: boolean }>(d);
+              if (payload?.merchant !== undefined && payload.isUnknown !== undefined) {
+                handleMerchantClick({ merchant: payload.merchant, isUnknown: payload.isUnknown });
+              }
+            }}
+            className="cursor-pointer"
           />
         </BarChart>
       </ResponsiveContainer>
@@ -103,9 +144,19 @@ export function MerchantsTab({ transactions }: MerchantsTabProps) {
         <span className="text-xs text-muted-foreground font-medium text-right">%</span>
 
         {merchants.map((m, i) => (
-          <div key={m.merchant} className="contents">
+          // Two rows can share the display name "Unknown" (synthetic empty
+          // bucket + a real merchant literally named "Unknown") — disambiguate
+          // the React key with the `isUnknown` flag.
+          <div key={`${m.merchant}|${m.isUnknown ? "u" : "n"}`} className="contents">
             <span className="tabular-nums text-muted-foreground">{i + 1}</span>
-            <span className="text-foreground truncate">{m.merchant}</span>
+            <span className="truncate">
+              <TransactionsDrilldownLink
+                onClick={() => handleMerchantClick(m)}
+                ariaLabel={`View ${m.merchant} transactions`}
+              >
+                {m.merchant}
+              </TransactionsDrilldownLink>
+            </span>
             <span className="tabular-nums font-medium text-foreground text-right">
               {formatMoney(m.total)}
             </span>
@@ -118,6 +169,32 @@ export function MerchantsTab({ transactions }: MerchantsTabProps) {
           </div>
         ))}
       </div>
+
+      <TransactionsModal
+        open={drilldown !== null}
+        onOpenChange={(open) => !open && setDrilldown(null)}
+        transactions={drilldownTransactions}
+        lockedFilters={
+          drilldown
+            ? {
+                // Empty string in the criteria maps to the empty-merchant
+                // bucket via `normalizeMerchant`; non-empty maps to the
+                // named merchant. The `kind` discriminator above guarantees
+                // these two paths don't collide on a real "Unknown" merchant.
+                merchant: drilldown.kind === "unknown" ? "" : drilldown.value,
+                dateRange: { from: dateRange.start, to: dateRange.end },
+              }
+            : {}
+        }
+        title={drilldown?.kind === "unknown" ? "Unknown" : (drilldown?.value ?? "")}
+        subtitle={
+          drilldown
+            ? `${formatRangeLabel(dateRange, periodType)} · ${drilldownTransactions.length} transaction${
+                drilldownTransactions.length === 1 ? "" : "s"
+              }`
+            : undefined
+        }
+      />
     </div>
   );
 }
