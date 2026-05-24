@@ -360,6 +360,7 @@ export class OpenAiSession implements CapySession {
         }
         const parsed = finalizeToolArgs(acc)
         if (parsed instanceof Error) {
+          this.opts.onEvent({ type: "tool-result", tool: acc.name, id: acc.id, ok: false })
           toolMessages.push({
             role: "tool",
             tool_call_id: acc.id,
@@ -368,6 +369,7 @@ export class OpenAiSession implements CapySession {
           continue
         }
         let resultText: string
+        let ok = true
         try {
           resultText = await runTool(acc.name, parsed, {
             repo: this.opts.repo,
@@ -375,8 +377,10 @@ export class OpenAiSession implements CapySession {
             budgetPath: this.opts.budgetPath,
           })
         } catch (err) {
+          ok = false
           resultText = `Error: ${err instanceof Error ? err.message : String(err)}`
         }
+        this.opts.onEvent({ type: "tool-result", tool: acc.name, id: acc.id, ok })
         toolMessages.push({
           role: "tool",
           tool_call_id: acc.id,

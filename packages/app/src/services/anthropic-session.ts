@@ -266,6 +266,7 @@ export class AnthropicSession implements CapySession {
           continue
         }
         let resultText: string
+        let ok = true
         try {
           resultText = await runTool(
             block.name,
@@ -277,8 +278,10 @@ export class AnthropicSession implements CapySession {
             },
           )
         } catch (err) {
+          ok = false
           resultText = `Error: ${err instanceof Error ? err.message : String(err)}`
         }
+        this.opts.onEvent({ type: "tool-result", tool: block.name, id: block.id, ok })
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,

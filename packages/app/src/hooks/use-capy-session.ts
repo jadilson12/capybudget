@@ -49,6 +49,7 @@ interface UseCapySessionReturn {
 export function useCapySession(opts: UseCapySessionOptions): UseCapySessionReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const hadMutationsRef = useRef(false)
+  const ackedToolCallsRef = useRef<Set<string>>(new Set())
 
   // Keep a ref to messages for use in sendMessage / stopStreaming without
   // stale closures.
@@ -73,17 +74,29 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
           break
         }
 
+        case "tool-result": {
+          if (!event.ok) break
+          if (!MUTATION_TOOL_NAMES.has(event.tool)) break
+          if (ackedToolCallsRef.current.has(event.id)) break
+          ackedToolCallsRef.current.add(event.id)
+          ctx.optsRef.current.onDataChanged?.()
+          break
+        }
+
         case "done":
           ctx.setIsStreaming(false)
-          if (hadMutationsRef.current) {
-            hadMutationsRef.current = false
+          // Fallback: mutation was requested but no per-call ack landed.
+          if (hadMutationsRef.current && ackedToolCallsRef.current.size === 0) {
             ctx.optsRef.current.onDataChanged?.()
           }
+          hadMutationsRef.current = false
+          ackedToolCallsRef.current = new Set()
           break
 
         case "error":
           ctx.setIsStreaming(false)
           hadMutationsRef.current = false
+          ackedToolCallsRef.current = new Set()
           setMessages((prev) => {
             const updated = [...prev]
             const last = updated[updated.length - 1]
@@ -113,6 +126,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     // onExit — process crashed unexpectedly, append recovery message
     () => {
       hadMutationsRef.current = false
+      ackedToolCallsRef.current = new Set()
       setMessages((prev) => [
         ...prev,
         {
@@ -227,6 +241,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       setMessages((prev) => [...prev, userMsg, assistantMsg])
       lifecycle.setIsStreaming(true)
       hadMutationsRef.current = false
+      ackedToolCallsRef.current = new Set()
 
       const session = ensureSession()
       if (!session) {
@@ -275,16 +290,18 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       ]
     })
 
-    if (hadMutationsRef.current) {
-      hadMutationsRef.current = false
+    if (hadMutationsRef.current && ackedToolCallsRef.current.size === 0) {
       lifecycle.optsRef.current.onDataChanged?.()
     }
+    hadMutationsRef.current = false
+    ackedToolCallsRef.current = new Set()
   }, [lifecycle])
 
   const newChat = useCallback(() => {
     lifecycle.cancel()
     setMessages([])
     hadMutationsRef.current = false
+    ackedToolCallsRef.current = new Set()
   }, [lifecycle])
 
   return { messages, isStreaming: lifecycle.isStreaming, sendMessage, stopStreaming, newChat }
