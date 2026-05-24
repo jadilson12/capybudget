@@ -1,26 +1,8 @@
-/**
- * Anthropic API adapter — implements `CapySession` against the Anthropic
- * Messages API directly from the renderer.
- *
- * Tool dispatch happens in-process via `runTool` from
- * `@capybudget/intelligence`. The agentic loop owns the message history
- * (`messages`) and an `AbortController` so `stop()` can interrupt the
- * in-flight request without leaving dangling `tool_use` blocks (which
- * the API would reject on the next turn).
- *
- * Stream-event shape: `content` emits carry the cumulative blocks for
- * the whole user→done cycle (accumulator hoisted out of the agentic
- * loop), so a turn-2 chart never wipes a turn-1 chart.
- *
- * Tauri's webview is a real browser, so the SDK works with
- * `dangerouslyAllowBrowser: true`. The flag is intended to discourage
- * bundling API keys into public web apps; here the key is the user's
- * own and already lives on disk.
- */
-
 import Anthropic from "@anthropic-ai/sdk"
 import {
   buildRenderToolMap,
+  extractErrorMessage,
+  RENDER_FOLLOWUPS_TOOL_NAME,
   runTool,
   getToolDefinitions,
   SESSION_TOOL_CALL_BUDGET,
@@ -32,8 +14,6 @@ import {
 
 const MAX_TOKENS = 8192
 
-/** Tool surface mirrors what the model sees in the Claude CLI:
- *  data + mutation + import + csv + read_file + render. */
 function getAnthropicTools(): Anthropic.Tool[] {
   return getToolDefinitions().map((t) => ({
     name: t.name,
@@ -42,8 +22,6 @@ function getAnthropicTools(): Anthropic.Tool[] {
   }))
 }
 
-/** Render-tool name → ContentBlock builder. Shared with every adapter
- *  via `buildRenderToolMap()` so the contract lives in one place. */
 const RENDER_TOOL_MAP = buildRenderToolMap()
 
 function toolUseToContentBlock(name: string, input: Record<string, unknown>): ContentBlock | null {
@@ -52,9 +30,17 @@ function toolUseToContentBlock(name: string, input: Record<string, unknown>): Co
   return { type: "tool-activity", tool: name }
 }
 
-/** Convert the app's MessageContent (CLI-style — string or text/image/
- *  document blocks) into an Anthropic user message. PDFs ride through
- *  the SDK's native `document` content type. */
+type UserContentBlock = Exclude<Anthropic.MessageParam["content"], string>[number]
+
+function normalizeUserContent(
+  content: Anthropic.MessageParam["content"],
+): UserContentBlock[] {
+  if (typeof content === "string") {
+    return content.length > 0 ? [{ type: "text", text: content }] : []
+  }
+  return content
+}
+
 function toAnthropicUserContent(
   content: MessageContent,
 ): Anthropic.MessageParam["content"] {
@@ -91,17 +77,14 @@ export class AnthropicSession implements CapySession {
   private abortController: AbortController | null = null
   private alive = false
   private killed = false
-  /** Flipped by stop(); checked in the agentic loop so we don't push
-   *  tool_results that reference an assistant turn we just dropped. */
   private interrupted = false
-  /** Per-session tool-call counter. Compared against
-   *  SESSION_TOOL_CALL_BUDGET to halt runaway loops. */
   private toolCallCount = 0
 
   constructor(opts: ApiAdapterOptions) {
     this.opts = opts
     this.client = new Anthropic({
       apiKey: opts.apiKey,
+      // Tauri webview — key lives on disk, not bundled into a public app.
       dangerouslyAllowBrowser: true,
     })
   }
@@ -114,36 +97,23 @@ export class AnthropicSession implements CapySession {
     if (this.killed) return
 
     this.interrupted = false
-    this.messages.push({
-      role: "user",
-      content: toAnthropicUserContent(content),
-    })
+    this.appendUserContent(toAnthropicUserContent(content))
     this.alive = true
 
     try {
       await this.runAgenticLoop()
-      // Suppress `done` if stop()/kill() bailed the loop — the UI has
-      // already shown the interrupted state.
       if (!this.interrupted && !this.killed) {
         this.opts.onEvent({ type: "done" })
       }
     } catch (err) {
-      // AbortError lands here when stop()/kill() interrupts the in-flight
-      // stream — that's expected, not an error to surface. Anything else
-      // is a real failure.
       if (this.wasAborted(err)) return
-      const message = err instanceof Error ? err.message : String(err)
-      this.opts.onEvent({ type: "error", message })
+      const { message, status } = extractErrorMessage(err)
+      this.opts.onEvent({ type: "error", message, status, provider: "anthropic" })
     } finally {
       this.abortController = null
     }
   }
 
-  /**
-   * Abort the in-flight request and drop any in-progress assistant turn
-   * that has unmatched `tool_use` blocks. Keep `messages` otherwise
-   * intact so the next `send()` continues the conversation.
-   */
   async stop(): Promise<void> {
     this.interrupted = true
     this.abortController?.abort()
@@ -151,7 +121,6 @@ export class AnthropicSession implements CapySession {
     this.dropTrailingUnmatchedToolUse()
   }
 
-  /** Discard history, abort if running. Next send starts fresh. */
   async restart(): Promise<void> {
     this.abortController?.abort()
     this.abortController = null
@@ -160,7 +129,6 @@ export class AnthropicSession implements CapySession {
     this.toolCallCount = 0
   }
 
-  /** Hard stop: abort, mark dead. */
   async kill(): Promise<void> {
     this.killed = true
     this.abortController?.abort()
@@ -168,12 +136,9 @@ export class AnthropicSession implements CapySession {
     this.alive = false
   }
 
-  // ── Internal ────────────────────────────────────────────────────
-
   private async runAgenticLoop(): Promise<void> {
     const tools = getAnthropicTools()
 
-    // Cumulative across the user→done cycle; survives loop iterations.
     const completedBlocks: ContentBlock[] = []
     const emitContent = () => {
       if (completedBlocks.length === 0) return
@@ -216,10 +181,6 @@ export class AnthropicSession implements CapySession {
 
       stream.on("contentBlock", (block) => {
         if (block.type === "tool_use") {
-          // A tool_use ends the current text run. Reset the accumulator
-          // so any subsequent text starts fresh as its own block —
-          // matches the assistant-turn shape downstream consumers expect
-          // (each text block stands alone, tool blocks are interleaved).
           accumulatedText = ""
           currentTextDraftIndex = null
           const cb = toolUseToContentBlock(
@@ -236,7 +197,14 @@ export class AnthropicSession implements CapySession {
         }
       })
 
-      const finalMessage = await stream.finalMessage()
+      // Resolve on `message` (message_stop) instead of `finalMessage()` — and don't
+      // abort afterwards. WKWebView leaves the aborted fetch body half-open, which
+      // can stall the next iteration's request for minutes.
+      const finalMessage = await new Promise<Anthropic.Message>((resolve, reject) => {
+        stream.once("message", (msg) => resolve(msg))
+        stream.once("abort", (err) => reject(err))
+        stream.once("error", (err) => reject(err))
+      })
 
       this.messages.push({
         role: "assistant",
@@ -245,16 +213,12 @@ export class AnthropicSession implements CapySession {
 
       if (finalMessage.stop_reason !== "tool_use") return
 
-      // Execute every tool_use block in this turn; the API wants all
-      // tool_results back as a single user turn. Each call counts
-      // against the per-session budget — once exhausted, the remaining
-      // calls in this turn get a "budget exhausted" error result and
-      // we exit cleanly after pushing them all back so the API doesn't
-      // see dangling tool_use blocks.
       const toolResults: Anthropic.ToolResultBlockParam[] = []
       let budgetExhausted = false
+      let terminalToolSeen = false
       for (const block of finalMessage.content) {
         if (block.type !== "tool_use") continue
+        if (block.name === RENDER_FOLLOWUPS_TOOL_NAME) terminalToolSeen = true
         this.toolCallCount++
         if (this.toolCallCount > SESSION_TOOL_CALL_BUDGET) {
           budgetExhausted = true
@@ -289,15 +253,12 @@ export class AnthropicSession implements CapySession {
         })
       }
 
-      // If stop() ran while tools were executing, the trailing
-      // assistant turn was dropped — pushing tool_results referencing
-      // its tool_use_ids would 400 on the next request. Bail out.
+      // stop() dropped the trailing assistant turn — pushing tool_results that
+      // reference its tool_use_ids would 400 on the next request.
       if (this.interrupted || this.killed) return
 
       this.messages.push({ role: "user", content: toolResults })
       if (budgetExhausted) {
-        // Suppress the post-loop `done` event — we surfaced an error
-        // instead. Re-use the interrupted flag for that signal.
         this.interrupted = true
         this.opts.onEvent({
           type: "error",
@@ -305,15 +266,23 @@ export class AnthropicSession implements CapySession {
         })
         return
       }
-      // Loop continues with the tool results in context.
+      // Terminal-signal tool — exit; the next user message merges into this turn.
+      if (terminalToolSeen) return
     }
   }
 
-  /**
-   * If the trailing assistant turn has any `tool_use` blocks without
-   * matching `tool_result`s in a following user turn, drop it. Sending
-   * a follow-up request with a dangling `tool_use` would 400.
-   */
+  // Merge into a trailing user turn — Anthropic rejects two consecutive user roles.
+  private appendUserContent(content: Anthropic.MessageParam["content"]): void {
+    const last = this.messages[this.messages.length - 1]
+    const incomingBlocks = normalizeUserContent(content)
+    if (last && last.role === "user") {
+      const existing = normalizeUserContent(last.content)
+      last.content = [...existing, ...incomingBlocks]
+      return
+    }
+    this.messages.push({ role: "user", content: incomingBlocks })
+  }
+
   private dropTrailingUnmatchedToolUse(): void {
     const last = this.messages[this.messages.length - 1]
     if (!last || last.role !== "assistant") return

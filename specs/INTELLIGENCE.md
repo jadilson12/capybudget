@@ -86,6 +86,8 @@ Adapter accumulation:
 
 Adapters emit `StreamEvent`s directly (`content` / `tool-result` / `done` / `error`) — there's no transport-level event layer above this.
 
+Adapters surface `done` off the model's terminal event (Anthropic `message` / OpenAI `finish_reason` / CLI assistant `stop_reason`) and abort the transport early rather than waiting for SSE or subprocess drain — gating on the transport adds seconds of post-content latency. The Claude CLI parser keeps the trailing `result` line as a safety-net `done` emitter for the case where no `stop_reason` arrives, so the UI never hangs.
+
 ## Adapters
 
 ### Claude Code adapter
@@ -95,6 +97,7 @@ Spawns `claude` via Tauri's shell plugin in pipe mode with stream-json I/O on bo
 - `--session-id <uuid>` — conversation context
 - `--mcp-config <path>` — points to MCP server
 - `--allowedTools "mcp__capy__*,Read"` — allowlist MCP tools + file reading
+- `--disallowedTools "TodoWrite,Task,Bash,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,KillBash,BashOutput"` — explicitly block the CLI's stock built-ins. Even when omitted from the allowlist the model still knows they exist and the CLI's baked-in system prompt nudges it to deliberate about them ("should I use TodoWrite for this?") — disallowing silences that meta-narration.
 - `--add-dir <budget-path>` — grant Read access to the budget folder
 - `--setting-sources ""` — skip CLAUDE.md files
 
@@ -156,6 +159,8 @@ The app invalidates caches per mutation tool call (not per turn) so the UI refle
 | `render_followups` | `{ chips: [{label, prompt}] }` (1–4 items) | Follow-up suggestion chips after an answer. |
 
 No-ops on the dispatch side — they carry structured data from AI to frontend via `tool_use` events.
+
+`render_followups` is a **terminal-signal tool**: when the model calls it, the assistant turn is over. The API adapters dispatch the call (so the UI gets the chips) and push the tool_result to history, then exit the agentic loop without making another request. Skipping the ack round-trip saves a full stream per turn. The Claude CLI runs the loop in-subprocess; the prompt tells the model to stay silent after calling `render_followups`, and the stream parser suppresses any empty/whitespace-only assistant text it still emits.
 
 ## MCP Server (External Agents)
 

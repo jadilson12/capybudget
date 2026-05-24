@@ -1,14 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { StreamEvent } from "@capybudget/intelligence"
 
-// ── Tauri shell mock ───────────────────────────────────────────────
-//
-// `Command.create(...)` returns an object with `.stdout.on('data')` /
-// `.stderr.on('data')` / `.on('close' | 'error')` / `.spawn()` etc.
-// The mock below lets each test capture handlers, then drive them
-// synthetically — feeding stream-json lines through stdout, signalling
-// process death via `close`, or routing surface errors via `error`.
-
 interface MockCommandHandlers {
   stdout: ((line: string) => void) | null
   stderr: ((line: string) => void) | null
@@ -69,8 +61,7 @@ vi.mock("@tauri-apps/api/path", () => ({
   join: vi.fn().mockImplementation(async (...parts: string[]) => parts.join("/")),
 }))
 
-// `__PROJECT_ROOT__` is a Vite define; tests run under Vitest which
-// doesn't replace it. Stub the global so the spawn path works.
+// Vite define — Vitest doesn't replace it, so stub for the spawn path.
 ;(globalThis as unknown as { __PROJECT_ROOT__: string }).__PROJECT_ROOT__ = ""
 
 import { ClaudeCliSession } from "./claude-cli-session"
@@ -104,7 +95,10 @@ describe("ClaudeCliSession", () => {
     handlers.stdout!(
       JSON.stringify({
         type: "assistant",
-        message: { content: [{ type: "text", text: "Hello" }] },
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+          stop_reason: "end_turn",
+        },
       }),
     )
     handlers.stdout!(JSON.stringify({ type: "result" }))
@@ -123,8 +117,6 @@ describe("ClaudeCliSession", () => {
     handlers.close!({ code: 1 })
 
     expect(exitHandler).toHaveBeenCalledTimes(1)
-    // Process exit must NOT surface as a StreamEvent.error — that's a
-    // separate signal the consumer handles via onExit.
     expect(events.some((e) => e.type === "error")).toBe(false)
   })
 
@@ -133,7 +125,6 @@ describe("ClaudeCliSession", () => {
     await session.send("hi")
 
     await session.kill()
-    // Tauri fires 'close' after kill resolves — simulate that.
     const handlers = latestHandlers.current!
     handlers.close?.({ code: 0 })
 
@@ -150,6 +141,7 @@ describe("ClaudeCliSession", () => {
     expect(events).toContainEqual({
       type: "error",
       message: "spawn failed: ENOENT",
+      provider: "claude-cli",
     })
   })
 
@@ -163,6 +155,19 @@ describe("ClaudeCliSession", () => {
     const idx = args.indexOf("--max-turns")
     expect(idx).toBeGreaterThan(-1)
     expect(args[idx + 1]).toBe(String(SESSION_TOOL_CALL_BUDGET))
+  })
+
+  it("passes --disallowedTools listing the CLI's stock built-ins to silence meta-narration", async () => {
+    const { Command } = await import("@tauri-apps/plugin-shell")
+    const { session } = makeSession()
+    await session.send("hi")
+
+    const args = (Command.create as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[]
+    const idx = args.indexOf("--disallowedTools")
+    expect(idx).toBeGreaterThan(-1)
+    expect(args[idx + 1]).toBe(
+      "TodoWrite,Task,Bash,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,KillBash,BashOutput",
+    )
   })
 
   describe("cross-turn content accumulation", () => {
@@ -242,9 +247,6 @@ describe("ClaudeCliSession", () => {
     })
 
     it("preserves text when a same-id tool_use delta follows it", async () => {
-      // Wire format: within one message.id, the CLI emits a text event
-      // then a separate tool_use event whose content does NOT include
-      // the prior text. The accumulator must append, not clobber.
       const { session, events } = makeSession()
       await session.send("hi")
 
@@ -348,12 +350,12 @@ describe("ClaudeCliSession", () => {
           message: {
             id: "msg_t1",
             content: [{ type: "text", text: "first reply" }],
+            stop_reason: "end_turn",
           },
         }),
       )
       firstHandlers.stdout!(JSON.stringify({ type: "result" }))
 
-      // Second send — start fresh; previous content must NOT bleed in.
       events.length = 0
       await session.send("second")
       const secondHandlers = latestHandlers.current!
@@ -376,10 +378,6 @@ describe("ClaudeCliSession", () => {
   })
 
   it("surfaces an error_max_turns result as an error event and suppresses onExit", async () => {
-    // When `--max-turns` trips, the CLI emits an `error_max_turns`
-    // result line, then exits cleanly. The parser turns the line into
-    // an error event; the session must mark the teardown deliberate so
-    // the close handler doesn't fire the unexpected-death onExit.
     const { session, events, exitHandler } = makeSession()
     await session.send("loop forever")
 
@@ -396,6 +394,7 @@ describe("ClaudeCliSession", () => {
     expect(events).toContainEqual({
       type: "error",
       message: "Reached maximum number of turns (100)",
+      provider: "claude-cli",
     })
 
     handlers.close?.({ code: 0 })
@@ -409,7 +408,6 @@ describe("ClaudeCliSession", () => {
 
       const handlers = latestHandlers.current!
 
-      // Model asks for a mutation tool — registers the id → name mapping.
       handlers.stdout!(
         JSON.stringify({
           type: "assistant",
@@ -425,8 +423,6 @@ describe("ClaudeCliSession", () => {
           },
         }),
       )
-      // MCP returns the result — forwarded as a `user` event with a
-      // tool_result content block. Tool name comes from the registry.
       handlers.stdout!(
         JSON.stringify({
           type: "user",
@@ -456,7 +452,6 @@ describe("ClaudeCliSession", () => {
 
       const handlers = latestHandlers.current!
 
-      // Turn 1: register toolu_X for create_transaction, then finish.
       handlers.stdout!(
         JSON.stringify({
           type: "assistant",
@@ -484,9 +479,6 @@ describe("ClaudeCliSession", () => {
       )
       handlers.stdout!(JSON.stringify({ type: "result" }))
 
-      // Turn 2: the CLI happens to reuse toolu_X, but registry was
-      // cleared on `done`. Without an assistant turn re-registering it,
-      // a stray tool_result must NOT emit a phantom tool-result event.
       await session.send("second turn")
       handlers.stdout!(
         JSON.stringify({
@@ -499,8 +491,8 @@ describe("ClaudeCliSession", () => {
         }),
       )
 
-      // Exactly one tool-result event across both turns — the registered
-      // one from turn 1, not the stale turn-2 hit.
+      // Registry was cleared after turn 1's `done`, so the reused id in turn 2
+      // must not re-emit (no assistant turn re-registered it).
       const toolResults = events.filter((e) => e.type === "tool-result")
       expect(toolResults).toHaveLength(1)
       expect(toolResults[0]).toEqual({

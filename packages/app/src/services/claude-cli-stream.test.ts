@@ -351,28 +351,126 @@ describe("parseStreamLine", () => {
   })
 
   describe("result event", () => {
-    it("emits done on a clean result", () => {
+    it("does NOT emit done on a clean result without cycleState (no safety net wired)", () => {
       const line = JSON.stringify({ type: "result" })
-      expect(parseStreamLine(line)).toEqual([{ type: "done" }])
+      expect(parseStreamLine(line)).toEqual([])
     })
 
-    it("emits error when the result carries is_error", () => {
-      // `--max-turns` produces this shape when the cap trips.
+    it("does NOT emit a duplicate done when the assistant stop_reason already fired one", () => {
+      const cycleState = { doneEmitted: false }
+      const assistantEvents = parseStreamLine(
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "All done." }],
+            stop_reason: "end_turn",
+          },
+        }),
+        undefined,
+        cycleState,
+      )
+      expect(assistantEvents).toContainEqual({ type: "done" })
+      expect(cycleState.doneEmitted).toBe(true)
+
+      const resultEvents = parseStreamLine(
+        JSON.stringify({ type: "result" }),
+        undefined,
+        cycleState,
+      )
+      expect(resultEvents).toEqual([])
+    })
+
+    it("emits done off the result line as a safety net when no stop_reason fired", () => {
+      const cycleState = { doneEmitted: false }
+      parseStreamLine(
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial" }] },
+        }),
+        undefined,
+        cycleState,
+      )
+      expect(cycleState.doneEmitted).toBe(false)
+
+      const resultEvents = parseStreamLine(
+        JSON.stringify({ type: "result" }),
+        undefined,
+        cycleState,
+      )
+      expect(resultEvents).toEqual([{ type: "done" }])
+      expect(cycleState.doneEmitted).toBe(true)
+    })
+
+    it("emits error when the result carries is_error (no safety-net done)", () => {
+      const cycleState = { doneEmitted: false }
       const line = JSON.stringify({
         type: "result",
         subtype: "error_max_turns",
         is_error: true,
         errors: ["Reached maximum number of turns (100)"],
       })
-      expect(parseStreamLine(line)).toEqual([
+      expect(parseStreamLine(line, undefined, cycleState)).toEqual([
         { type: "error", message: "Reached maximum number of turns (100)" },
       ])
+      expect(cycleState.doneEmitted).toBe(false)
     })
 
     it("falls back to a generic message when is_error has no details", () => {
       const line = JSON.stringify({ type: "result", is_error: true })
       expect(parseStreamLine(line)).toEqual([
         { type: "error", message: "Session terminated with an error." },
+      ])
+    })
+  })
+
+  describe("assistant stop_reason → done", () => {
+    it("emits done after content when the assistant turn has stop_reason: end_turn", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "All done." }],
+          stop_reason: "end_turn",
+        },
+      })
+      expect(parseStreamLine(line)).toEqual([
+        { type: "content", blocks: [{ type: "text", content: "All done." }] },
+        { type: "done" },
+      ])
+    })
+
+    it("does not emit done when stop_reason is tool_use (more turns coming)", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "mcp__capy__list_accounts",
+              input: {},
+            },
+          ],
+          stop_reason: "tool_use",
+        },
+      })
+      expect(parseStreamLine(line)).toEqual([
+        {
+          type: "content",
+          blocks: [{ type: "tool-activity", tool: "list_accounts" }],
+        },
+      ])
+    })
+
+    it("emits done for any terminal stop_reason (e.g. max_tokens)", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "Cut off." }],
+          stop_reason: "max_tokens",
+        },
+      })
+      expect(parseStreamLine(line)).toEqual([
+        { type: "content", blocks: [{ type: "text", content: "Cut off." }] },
+        { type: "done" },
       ])
     })
   })
@@ -564,8 +662,6 @@ describe("parseStreamLine", () => {
   describe("tool_result → tool-result event", () => {
     it("emits a tool-result event from a user message carrying a tool_result block", () => {
       const registry = new Map<string, string>()
-      // First, the assistant turn that requested the call — registers
-      // the id → name mapping.
       parseStreamLine(
         JSON.stringify({
           type: "assistant",
@@ -583,7 +679,6 @@ describe("parseStreamLine", () => {
         registry,
       )
 
-      // Then the user message wrapping the MCP tool result.
       const events = parseStreamLine(
         JSON.stringify({
           type: "user",
@@ -664,6 +759,27 @@ describe("parseStreamLine", () => {
         }),
       )
       expect(events).toEqual([])
+    })
+  })
+
+  describe("empty / whitespace text alongside other blocks", () => {
+    it("drops whitespace-only text but preserves a sibling tool_use", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "  " },
+            { type: "tool_use", name: "list_accounts", input: {} },
+          ],
+        },
+      })
+
+      expect(parseStreamLine(line)).toEqual([
+        {
+          type: "content",
+          blocks: [{ type: "tool-activity", tool: "list_accounts" }],
+        },
+      ])
     })
   })
 

@@ -21,6 +21,9 @@ import type {
   TableBlock,
 } from "./types"
 
+// Terminal-signal tool contract — see specs/INTELLIGENCE.md.
+export const RENDER_FOLLOWUPS_TOOL_NAME = "render_followups"
+
 type RenderBuilder = (input: Record<string, unknown>) => ContentBlock | null
 
 const BUILDERS: Record<string, RenderBuilder> = {
@@ -39,26 +42,18 @@ const BUILDERS: Record<string, RenderBuilder> = {
     return { type: "donut-chart", title: input.title, data: input.data } satisfies DonutChartBlock
   },
 
-  render_followups: (input) => {
+  [RENDER_FOLLOWUPS_TOOL_NAME]: (input) => {
     const chips = sanitizeFollowupChips(input.chips)
     if (chips === null) return null
     return { type: "followups", chips } satisfies FollowupsBlock
   },
 }
 
-/**
- * Build the render-tool map. Returns a fresh copy so adapter modules
- * can't accidentally mutate the shared definition.
- */
+// Fresh copy so adapters can't mutate the shared definition.
 export function buildRenderToolMap(): Record<string, RenderBuilder> {
   return { ...BUILDERS }
 }
 
-/**
- * Validate and normalize the `chips` payload from a `render_followups`
- * tool call. Returns the trimmed chip list, or `null` when the input is
- * malformed or empty (so the UI never renders an empty pill row).
- */
 function sanitizeFollowupChips(raw: unknown): FollowupChip[] | null {
   if (!Array.isArray(raw)) return null
   const chips: FollowupChip[] = []

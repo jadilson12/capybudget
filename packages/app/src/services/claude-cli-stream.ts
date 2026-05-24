@@ -1,40 +1,20 @@
-/**
- * Claude CLI stream-json decoder — internal to `ClaudeCliSession`.
- * Stateless: each line is parsed into one or more `StreamEvent`s and
- * forwarded with the per-turn `message.id`. Accumulation logic lives
- * in the session (see `accumulateCycleEvent`).
- */
-
 import {
   buildRenderToolMap,
   type ContentBlock,
   type StreamEvent,
 } from "@capybudget/intelligence"
 
-// ── Render tool → ContentBlock mapping ───────────────────────────
-// Shared with the API adapters via `buildRenderToolMap()` —
-// single source of truth for the render-tool → ContentBlock contract.
-
 const RENDER_TOOL_MAP: Record<string, (input: Record<string, unknown>) => ContentBlock | null> =
   buildRenderToolMap()
 
-// ── Parser ───────────────────────────────────────────────────────
+export interface CycleState {
+  doneEmitted: boolean
+}
 
-/**
- * Parse a single stdout JSON line from the Claude CLI.
- *
- * Returns an array of StreamEvents (typically one per line).
- *
- * The optional `toolUseRegistry` map is read+written across lines: when
- * the parser sees a `tool_use` block in an `assistant` event it records
- * `id → name`; when it later sees a matching `tool_result` in a `user`
- * event it looks the name back up so the emitted `tool-result` event
- * carries the tool name. Callers own the map's lifetime (the session
- * resets it on each user→done cycle).
- */
 export function parseStreamLine(
   line: string,
   toolUseRegistry?: Map<string, string>,
+  cycleState?: CycleState,
 ): StreamEvent[] {
   const trimmed = line.trim()
   if (!trimmed) return []
@@ -51,14 +31,21 @@ export function parseStreamLine(
   switch (event.type) {
     case "assistant": {
       const message = event.message as
-        | { id?: string; content?: Array<Record<string, unknown>> }
+        | {
+            id?: string
+            content?: Array<Record<string, unknown>>
+            stop_reason?: string
+          }
         | undefined
       const rawBlocks = message?.content ?? []
       const blocks: ContentBlock[] = []
 
       for (const block of rawBlocks) {
         if (block.type === "text") {
-          blocks.push({ type: "text", content: block.text as string })
+          // CLI post-tool ack sometimes surfaces as a blank assistant message; skip it.
+          const text = block.text as string
+          if (text.trim().length === 0) continue
+          blocks.push({ type: "text", content: text })
         } else if (block.type === "tool_use") {
           const rawName = block.name as string
           const baseName = rawName.replace(/^mcp__\w+__/, "")
@@ -84,17 +71,18 @@ export function parseStreamLine(
           messageId ? { type: "content", blocks, messageId } : { type: "content", blocks },
         )
       }
+
+      // Treat the assistant turn's terminal stop_reason as `done`; the trailing
+      // `result` line would add seconds of subprocess-drain latency.
+      const stopReason = message?.stop_reason
+      if (stopReason && stopReason !== "tool_use") {
+        events.push({ type: "done" })
+        if (cycleState) cycleState.doneEmitted = true
+      }
       break
     }
 
     case "user": {
-      // The CLI wraps MCP tool results inside a `user` message whose
-      // content array carries one or more `tool_result` blocks. The
-      // model also sees this — for the consumer we only need the
-      // completion signal (per-call cache invalidation in the hook).
-      // The result block carries the `tool_use_id` but not the name;
-      // we look the name up in the registry populated when we parsed
-      // the matching assistant turn.
       const message = event.message as
         | { content?: Array<Record<string, unknown>> }
         | undefined
@@ -104,7 +92,7 @@ export function parseStreamLine(
         const toolUseId = block.tool_use_id as string | undefined
         if (!toolUseId) continue
         const name = toolUseRegistry?.get(toolUseId)
-        if (!name) continue // unknown id (registry not provided or mismatched) — skip
+        if (!name) continue
         const ok = block.is_error !== true
         events.push({ type: "tool-result", tool: name, id: toolUseId, ok })
       }
@@ -112,16 +100,15 @@ export function parseStreamLine(
     }
 
     case "result": {
-      // Result lines mark the end of a turn. Most are clean completions
-      // (`{type: "result"}`); error terminations carry `is_error: true`
-      // and an `errors` array — `error_max_turns` is the main one we
-      // care about (the CLI's runaway backstop, enabled via `--max-turns`).
       if (event.is_error) {
         const errs = event.errors as string[] | undefined
         const message = errs?.[0] ?? "Session terminated with an error."
         events.push({ type: "error", message })
-      } else {
+      } else if (cycleState && !cycleState.doneEmitted) {
+        // Fallback when no terminal `stop_reason` arrived (mid-stream
+        // truncation, future CLI versions) — keeps the UI from hanging.
         events.push({ type: "done" })
+        cycleState.doneEmitted = true
       }
       break
     }
