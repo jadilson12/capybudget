@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { subMonths } from "date-fns";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ interface DateRangeNavProps {
   canGoBack: boolean;
   canGoForward: boolean;
   onCustomRange: (range: DateRange) => void;
+  dataBounds?: DateRange | null;
 }
 
 const PERIOD_LABELS: Record<PeriodType, string> = {
@@ -43,8 +44,18 @@ export function DateRangeNav({
   canGoBack,
   canGoForward,
   onCustomRange,
+  dataBounds,
 }: DateRangeNavProps) {
   const label = formatRangeLabel(dateRange, periodType);
+
+  const calendarDisabled = useMemo(() => {
+    if (!dataBounds) return undefined;
+    const lastDataDay = new Date(dataBounds.end);
+    lastDataDay.setDate(lastDataDay.getDate() - 1);
+    const today = new Date();
+    const maxDate = lastDataDay > today ? lastDataDay : today;
+    return [{ before: dataBounds.start }, { after: maxDate }];
+  }, [dataBounds]);
   const showArrows = periodType !== "allTime";
   const [calendarOpen, setCalendarOpen] = useState(false);
   // Always reflect the actual store state (already snapped to month boundaries)
@@ -148,6 +159,7 @@ export function DateRangeNav({
                 onSelect={setCalendarRange}
                 numberOfMonths={2}
                 defaultMonth={calendarRange?.from ?? subMonths(new Date(), 1)}
+                disabled={calendarDisabled}
               />
               <div className="flex items-center justify-end border-t px-3 py-2">
                 <Button

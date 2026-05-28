@@ -40,21 +40,34 @@ function getCurrentYearRange(): DateRange {
   };
 }
 
-function getCurrentQuarterRange(): DateRange {
-  const now = new Date();
-  const q = Math.floor(now.getMonth() / 3) * 3;
-  return {
-    start: new Date(now.getFullYear(), q, 1),
-    end: new Date(now.getFullYear(), q + 3, 1),
-  };
+function defaultRangeForPeriod(type: PeriodType): DateRange {
+  return rangeForPeriodContaining(new Date(), type);
 }
 
-function defaultRangeForPeriod(type: PeriodType): DateRange {
-  switch (type) {
-    case "month": return getCurrentMonthRange();
-    case "quarter": return getCurrentQuarterRange();
-    case "year": return getCurrentYearRange();
-    default: return getCurrentMonthRange();
+function rangeForPeriodContaining(date: Date, periodType: PeriodType): DateRange {
+  switch (periodType) {
+    case "month":
+      return {
+        start: new Date(date.getFullYear(), date.getMonth(), 1),
+        end: new Date(date.getFullYear(), date.getMonth() + 1, 1),
+      };
+    case "quarter": {
+      const q = Math.floor(date.getMonth() / 3) * 3;
+      return {
+        start: new Date(date.getFullYear(), q, 1),
+        end: new Date(date.getFullYear(), q + 3, 1),
+      };
+    }
+    case "year":
+      return {
+        start: new Date(date.getFullYear(), 0, 1),
+        end: new Date(date.getFullYear() + 1, 0, 1),
+      };
+    default:
+      return {
+        start: new Date(date.getFullYear(), date.getMonth(), 1),
+        end: new Date(date.getFullYear(), date.getMonth() + 1, 1),
+      };
   }
 }
 
@@ -109,13 +122,13 @@ const DEFAULT_TABS: Record<TabId, TabState> = {
   spending: { periodType: "month", dateRange: getCurrentMonthRange() },
   netWorth: { periodType: "allTime", dateRange: getCurrentYearRange() }, // placeholder until data loads
   cashFlow: { periodType: "year", dateRange: getCurrentYearRange() },
-  compare: { periodType: "year", dateRange: getCurrentYearRange() },
-  merchants: { periodType: "month", dateRange: getCurrentMonthRange() },
+  compare: { periodType: "allTime", dateRange: getCurrentYearRange() },
+  merchants: { periodType: "allTime", dateRange: getCurrentYearRange() },
   monthlyBudget: { periodType: "month", dateRange: getCurrentMonthRange() },
 };
 
 export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
-  activeTab: "monthlyBudget",
+  activeTab: "spending",
   tabs: { ...DEFAULT_TABS },
   dataBounds: null,
 
@@ -160,8 +173,11 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
     const { activeTab, tabs, dataBounds } = get();
     const tab = tabs[activeTab];
     if (tab.periodType === "allTime" || !dataBounds) return false;
-    // Allow navigating up to one period past the last data point
-    return tab.dateRange.start.getTime() < dataBounds.end.getTime();
+    if (activeTab === "monthlyBudget") {
+      const now = new Date();
+      return tab.dateRange.start.getTime() < new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
+    }
+    return tab.dateRange.end.getTime() < dataBounds.end.getTime();
   },
 
   setAllTimeRange: (transactions) => {
@@ -177,11 +193,15 @@ export const useAnalyticsStore = create<AnalyticsState>((set, get) => ({
     const { tabs } = get();
     const updates: Partial<Record<TabId, TabState>> = {};
 
-    // Initialize allTime tabs that haven't been set yet
     if (bounds) {
+      const latestDate = new Date(bounds.end);
+      latestDate.setMonth(latestDate.getMonth() - 1);
+
       for (const [id, tab] of Object.entries(tabs) as [TabId, TabState][]) {
         if (tab.periodType === "allTime") {
-          updates[id] = { periodType: "allTime", dateRange: bounds };
+          updates[id as TabId] = { periodType: "allTime", dateRange: bounds };
+        } else if (id !== "monthlyBudget" && tab.dateRange.start.getTime() >= bounds.end.getTime()) {
+          updates[id as TabId] = { ...tab, dateRange: rangeForPeriodContaining(latestDate, tab.periodType) };
         }
       }
     }

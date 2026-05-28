@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  ensureMinMonths,
   filterTransactionsByDateRange,
   getSpendingByCategory,
   getIncomeByCategory,
@@ -61,6 +62,28 @@ const TRANSACTIONS: Transaction[] = [
   // Transaction on archived account (for net worth test)
   txn({ id: "t12", type: "income", amount: 99999, accountId: "acc-archived", categoryId: "cat-salary", datetime: "2026-01-01T10:00:00.000Z" }),
 ];
+
+// ── ensureMinMonths ─────
+
+describe("ensureMinMonths", () => {
+  it("returns the original range when already >= minMonths", () => {
+    const range = { start: new Date(2026, 0, 1), end: new Date(2027, 0, 1) };
+    expect(ensureMinMonths(range, 12)).toBe(range);
+  });
+
+  it("extends a short range to minMonths", () => {
+    const range = { start: new Date(2026, 0, 1), end: new Date(2026, 3, 1) };
+    const result = ensureMinMonths(range, 12);
+    expect(result.start).toEqual(new Date(2026, 0, 1));
+    expect(result.end).toEqual(new Date(2027, 0, 1));
+  });
+
+  it("handles year boundaries", () => {
+    const range = { start: new Date(2025, 9, 1), end: new Date(2025, 11, 1) };
+    const result = ensureMinMonths(range, 12);
+    expect(result.end).toEqual(new Date(2026, 9, 1));
+  });
+});
 
 // ── filterTransactionsByDateRange ─────
 
@@ -331,8 +354,8 @@ describe("getPeriodSummary", () => {
 describe("getCashFlow", () => {
   it("groups income and expenses by month", () => {
     const result = getCashFlow(TRANSACTIONS, {
-      start: new Date("2026-01-01T00:00:00.000Z"),
-      end: new Date("2026-04-01T00:00:00.000Z"),
+      start: new Date(2026, 0, 1),
+      end: new Date(2026, 3, 1),
     });
     // Should have Jan, Feb, Mar
     expect(result.length).toBe(3);
@@ -361,8 +384,8 @@ describe("getCashFlow", () => {
 
   it("returns results sorted chronologically", () => {
     const result = getCashFlow(TRANSACTIONS, {
-      start: new Date("2026-01-01T00:00:00.000Z"),
-      end: new Date("2026-04-01T00:00:00.000Z"),
+      start: new Date(2026, 0, 1),
+      end: new Date(2026, 3, 1),
     });
     for (let i = 1; i < result.length; i++) {
       expect(new Date(result[i - 1].date).getTime()).toBeLessThan(
@@ -373,26 +396,31 @@ describe("getCashFlow", () => {
 
   it("returns single month when range covers one month", () => {
     const result = getCashFlow(TRANSACTIONS, {
-      start: new Date("2026-01-01T00:00:00.000Z"),
-      end: new Date("2026-02-01T00:00:00.000Z"),
+      start: new Date(2026, 0, 1),
+      end: new Date(2026, 1, 1),
     });
     expect(result.length).toBe(1);
     expect(result[0].month).toBe("Jan 2026");
   });
 
-  it("returns empty for empty transactions", () => {
+  it("emits zero-valued points for empty transactions", () => {
     const result = getCashFlow([], {
-      start: new Date("2026-01-01T00:00:00.000Z"),
-      end: new Date("2026-12-31T00:00:00.000Z"),
+      start: new Date(2026, 0, 1),
+      end: new Date(2027, 0, 1),
     });
-    expect(result).toEqual([]);
+    expect(result.length).toBe(12);
+    for (const point of result) {
+      expect(point.income).toBe(0);
+      expect(point.expenses).toBe(0);
+      expect(point.net).toBe(0);
+    }
   });
 
   it("excludes transfers", () => {
     // Use only Feb range which contains transfers t9/t10
     const result = getCashFlow(TRANSACTIONS, {
-      start: new Date("2026-02-01T00:00:00.000Z"),
-      end: new Date("2026-03-01T00:00:00.000Z"),
+      start: new Date(2026, 1, 1),
+      end: new Date(2026, 2, 1),
     });
     expect(result.length).toBe(1);
     const feb = result[0];
@@ -404,8 +432,8 @@ describe("getCashFlow", () => {
 
   it("only includes months within range", () => {
     const result = getCashFlow(TRANSACTIONS, {
-      start: new Date("2026-02-01T00:00:00.000Z"),
-      end: new Date("2026-03-01T00:00:00.000Z"),
+      start: new Date(2026, 1, 1),
+      end: new Date(2026, 2, 1),
     });
     // Should only have February, even though transactions exist in Jan and Mar
     expect(result.length).toBe(1);
@@ -557,10 +585,11 @@ describe("getCategoryTrends", () => {
 
   it("excludes transfers from totals and points", () => {
     const result = getCategoryTrends(TRANSACTIONS, CATEGORIES, range);
-    // No category id matches a transfer, but make sure no spurious entries leaked in
+    // No category id matches a transfer, but make sure no spurious entries leaked in.
+    // Zero-valued entries are normal (continuous X-axis fills empty periods).
     for (const point of result.points) {
       for (const amt of Object.values(point.byCategory)) {
-        expect(amt).toBeGreaterThan(0);
+        expect(amt).toBeGreaterThanOrEqual(0);
       }
     }
     const total = result.series.reduce((s, x) => s + x.total, 0);
@@ -575,13 +604,14 @@ describe("getCategoryTrends", () => {
     expect(salary.total).toBe(1099999);
   });
 
-  it("returns empty for periods with no matching transactions", () => {
+  it("returns empty series for periods with no matching transactions", () => {
     const result = getCategoryTrends(TRANSACTIONS, CATEGORIES, {
       start: new Date("2020-01-01T00:00:00.000Z"),
       end: new Date("2020-12-31T00:00:00.000Z"),
     });
-    expect(result.points).toEqual([]);
+    // No transactions in range → no categories selected → no series, no points
     expect(result.series).toEqual([]);
+    expect(result.points).toEqual([]);
   });
 
   it("orders points chronologically", () => {
@@ -641,15 +671,19 @@ describe("getCategoryTrends", () => {
       expect(feb.byCategory[""]).toBe(5000);
     });
 
-    it("returns no points when no in-range transactions match selected categories", () => {
-      // Pick a real category that has no data in 2020
+    it("emits zero-filled points when no in-range transactions match selected categories", () => {
       const result = getCategoryTrends(TRANSACTIONS, CATEGORIES, {
-        start: new Date("2020-01-01T00:00:00.000Z"),
-        end: new Date("2020-12-31T00:00:00.000Z"),
+        start: new Date(2020, 0, 1),
+        end: new Date(2020, 12, 1),
       }, { categoryIds: ["cat-rent"] });
-      expect(result.points).toEqual([]);
+      // Series present (explicitly requested) but with zero total
       expect(result.series.length).toBe(1);
       expect(result.series[0].total).toBe(0);
+      // Continuous X-axis: one point per month, all zero-filled
+      expect(result.points.length).toBe(12);
+      for (const point of result.points) {
+        expect(point.byCategory["cat-rent"]).toBe(0);
+      }
     });
 
     it("takes precedence over limit when both are provided", () => {
@@ -692,6 +726,51 @@ describe("getCategoryTrends", () => {
         const keys = Object.keys(point.byCategory);
         expect(new Set(keys).size).toBe(keys.length);
       }
+    });
+  });
+
+  describe("weekly granularity", () => {
+    // 3-month range: Jan–Mar 2026, ~13 weeks
+    const weekRange = {
+      start: new Date(2026, 0, 1),
+      end: new Date(2026, 3, 1),
+    };
+
+    it("produces weekly labels like 'Jan 5' instead of 'Jan 2026'", () => {
+      const result = getCategoryTrends(TRANSACTIONS, CATEGORIES, weekRange, {
+        categoryIds: ["cat-food"],
+        granularity: "week",
+      });
+      expect(result.points.length).toBeGreaterThan(3);
+      for (const p of result.points) {
+        expect(p.month).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
+      }
+    });
+
+    it("produces more points than monthly for the same range", () => {
+      const monthly = getCategoryTrends(TRANSACTIONS, CATEGORIES, weekRange, {
+        categoryIds: ["cat-food"],
+        granularity: "month",
+      });
+      const weekly = getCategoryTrends(TRANSACTIONS, CATEGORIES, weekRange, {
+        categoryIds: ["cat-food"],
+        granularity: "week",
+      });
+      expect(weekly.points.length).toBeGreaterThan(monthly.points.length);
+    });
+
+    it("totals match between monthly and weekly", () => {
+      const monthly = getCategoryTrends(TRANSACTIONS, CATEGORIES, weekRange, {
+        categoryIds: ["cat-food"],
+        granularity: "month",
+      });
+      const weekly = getCategoryTrends(TRANSACTIONS, CATEGORIES, weekRange, {
+        categoryIds: ["cat-food"],
+        granularity: "week",
+      });
+      const monthlySum = monthly.points.reduce((s, p) => s + (p.byCategory["cat-food"] ?? 0), 0);
+      const weeklySum = weekly.points.reduce((s, p) => s + (p.byCategory["cat-food"] ?? 0), 0);
+      expect(weeklySum).toBe(monthlySum);
     });
   });
 });
