@@ -1,3 +1,30 @@
+/** The comparison bases the Monthly Budget tab can average implicit targets
+ *  over. Source of truth for both the `BudgetBasis` type and the runtime
+ *  list the basis picker enumerates. */
+export const BUDGET_BASES = [
+  "trailing3",
+  "trailing6",
+  "trailing12",
+  "sameMonthLastYear",
+] as const;
+
+/** Which month-set the Monthly Budget tab's implicit targets average over.
+ *  Drives the view computation and `getCategoryHistoricalStats`; supports
+ *  exhaustiveness checks. */
+export type BudgetBasis = (typeof BUDGET_BASES)[number];
+
+/** Descriptive labels for the basis picker's menu options — the long form a
+ *  user reads when choosing ("3 months"), distinct from the resolved
+ *  reference label that `basisLabel` renders on the trigger and pin ("3-mo
+ *  avg" / "Dec 2024"). Co-located with `BUDGET_BASES` so the two label sets
+ *  can't drift from the type. */
+export const BASIS_OPTION_LABELS: Record<BudgetBasis, string> = {
+  trailing3: "3 months",
+  trailing6: "6 months",
+  trailing12: "12 months",
+  sameMonthLastYear: "same month last year",
+};
+
 export interface BudgetMeta {
   schemaVersion: number;
   name: string;

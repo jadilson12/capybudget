@@ -10,8 +10,12 @@ import {
   getTopMerchants,
   getCategoryTrends,
   getMonthlyBudgetSummary,
+  getCategoryHistoricalStats,
+  basisMonths,
+  basisLabel,
 } from "./analytics";
-import type { Transaction, Category, Account } from "./types";
+import type { Transaction, Category, Account, BudgetBasis } from "./types";
+import type { DateRange } from "./analytics";
 
 // ── Test fixtures ─────
 
@@ -865,48 +869,364 @@ describe("getMonthlyBudgetSummary", () => {
     expect(byId.get("daily-coffee")).toBeNull(); // untracked
   });
 
-  it("computes top KPI totals — assigned, tracked spent, other spending", () => {
-    const result = getMonthlyBudgetSummary(txns, cats, FEB);
-
-    // Tracked categories: rent (200000) + utils (15000) + food (60000) + fun (0)
-    expect(result.totalAssigned).toBe(275000);
-    // Tracked spent: rent (200000) + food (70000) + fun (5000)
-    expect(result.totalSpentTracked).toBe(275000);
-    // Other spending = untracked, non-Income spend: coffee (3500) + clothing (8000)
-    expect(result.totalOtherSpending).toBe(11500);
-    expect(result.trackedCount).toBe(4);
-    expect(result.totalCount).toBe(6);
-  });
-
   it("ignores income transactions, transfers, and out-of-range entries", () => {
     const result = getMonthlyBudgetSummary(txns, cats, FEB);
-    // If income (f7), transfers (f8/f9), or January expense (j1) leaked through,
-    // these numbers would shift — they don't.
-    expect(result.totalSpentTracked).toBe(275000);
-    expect(result.totalOtherSpending).toBe(11500);
+    const byId = new Map(result.rows.map((r) => [r.categoryId, r.spent]));
+    // If income (f7), transfers (f8/f9), or the January expense (j1) leaked
+    // through, these per-category sums would shift — they don't.
+    expect(byId.get("fixed-rent")).toBe(200000); // j1's January -999999 excluded
+    expect(byId.get("daily-coffee")).toBe(3500);
+    expect(byId.get("personal-clothing")).toBe(8000);
   });
 
   it("ignores uncategorized expenses (no categoryId)", () => {
-    // The uncategorized $12.34 in February must NOT appear under "Other Spending"
-    // — Other Spending is for *known* untracked categories, not uncategorized rows.
+    // The uncategorized $12.34 in February must not surface anywhere — there is
+    // no row for it, and it must not be folded into any categorized row's spend.
     const result = getMonthlyBudgetSummary(txns, cats, FEB);
-    expect(result.totalOtherSpending).toBe(11500); // would be 12734 if it leaked
+    expect(result.rows.find((r) => r.categoryId === "")).toBeUndefined();
+    const totalSpent = result.rows.reduce((s, r) => s + r.spent, 0);
+    expect(totalSpent).toBe(286500); // 200000 + 70000 + 5000 + 3500 + 8000, no 1234
   });
 
-  it("returns zero totals when no transactions in range", () => {
+  it("returns zero spend for every row when no transactions in range", () => {
     const result = getMonthlyBudgetSummary([], cats, FEB);
-    expect(result.totalAssigned).toBe(275000); // assigned is independent of txns
-    expect(result.totalSpentTracked).toBe(0);
-    expect(result.totalOtherSpending).toBe(0);
     for (const r of result.rows) {
       expect(r.spent).toBe(0);
     }
   });
+});
 
-  it("counts categories the toggle label depends on", () => {
-    const result = getMonthlyBudgetSummary(txns, cats, FEB);
-    // 4 of 6 — matches the "X of N tracked" label
-    expect(result.trackedCount).toBe(4);
-    expect(result.totalCount).toBe(6);
+// ── getCategoryHistoricalStats ─────
+
+describe("getCategoryHistoricalStats", () => {
+  // Viewed month = April 2026. History is Jan/Feb/Mar; the immediately
+  // preceding month is March.
+  //
+  // Ranges and datetimes use *local* constructors (`new Date(y, m, d)`),
+  // matching how the analytics store builds month ranges in production
+  // (`new Date(now.getFullYear(), now.getMonth(), 1)`). A UTC literal like
+  // `"2026-04-01T00:00:00Z"` would not round-trip through `.getMonth()` in a
+  // non-UTC timezone, shifting the viewed month — a test-only artifact the
+  // real app never hits.
+  const APRIL: DateRange = {
+    start: new Date(2026, 3, 1),
+    end: new Date(2026, 4, 1),
+  };
+  const iso = (y: number, m: number, d: number) =>
+    new Date(y, m, d, 10, 0, 0).toISOString();
+
+  const cats: Category[] = [
+    { id: "food", name: "Groceries", group: "Daily Living", archived: false, sortOrder: 0, assigned: null },
+    { id: "rent", name: "Rent", group: "Fixed", archived: false, sortOrder: 0, assigned: null },
+    { id: "fun", name: "Fun", group: "Personal", archived: false, sortOrder: 0, assigned: null },
+    // Income — excluded entirely
+    { id: "pay", name: "Paycheck", group: "Income", archived: false, sortOrder: 0, assigned: null },
+    // Archived — excluded entirely
+    { id: "old", name: "Legacy", group: "Personal", archived: true, sortOrder: 9, assigned: null },
+  ];
+
+  const expense = (
+    o: Pick<Transaction, "id" | "amount" | "categoryId" | "datetime"> & Partial<Transaction>,
+  ): Transaction => ({
+    type: "expense",
+    accountId: "acc-1",
+    transferPairId: "",
+    merchant: "",
+    note: "",
+    createdAt: "",
+    ...o,
+  });
+
+  const txns: Transaction[] = [
+    // food: Jan 10000, Feb 20000, Mar 30000  → last=30000, avg3=(60000)/3=20000
+    expense({ id: "a", amount: -10000, categoryId: "food", datetime: iso(2026, 0, 15) }),
+    expense({ id: "b", amount: -20000, categoryId: "food", datetime: iso(2026, 1, 15) }),
+    expense({ id: "c", amount: -30000, categoryId: "food", datetime: iso(2026, 2, 15) }),
+    // rent: only Jan 120000 → last(Mar)=0, avg3=120000/1 active=120000 → implicit=max(0,120000)=120000
+    expense({ id: "d", amount: -120000, categoryId: "rent", datetime: iso(2026, 0, 1) }),
+    // fun: only the viewed month (April) — must be excluded from history
+    expense({ id: "e", amount: -50000, categoryId: "fun", datetime: iso(2026, 3, 5) }),
+    // income + archived-category spend in history — must be ignored
+    expense({ id: "f", amount: 500000, categoryId: "pay", datetime: iso(2026, 2, 1), type: "income" }),
+    expense({ id: "g", amount: -9999, categoryId: "old", datetime: iso(2026, 2, 1) }),
+    // uncategorized expense in history — must be ignored
+    expense({ id: "h", amount: -1234, categoryId: "", datetime: iso(2026, 2, 2) }),
+  ];
+
+  it("computes lastMonth from the full calendar month before the viewed month", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    expect(byCategory.get("food")!.lastMonth).toBe(30000); // March
+    expect(byCategory.get("rent")!.lastMonth).toBe(0); // no March spend
+  });
+
+  it("averages reference over the active (non-zero) months only", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    expect(byCategory.get("food")!.reference).toBe(20000); // (10000+20000+30000)/3 active
+    expect(byCategory.get("rent")!.reference).toBe(120000); // 120000/1 active month
+  });
+
+  it("sets implicitTarget to max(lastMonth, reference)", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    expect(byCategory.get("food")!.implicitTarget).toBe(30000); // max(30000, 20000)
+    expect(byCategory.get("rent")!.implicitTarget).toBe(120000); // max(0, 120000)
+  });
+
+  it("excludes the viewed month and later from history", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    // `fun` only has April (viewed) spend — no history, so it tracks at the
+    // dataset's history depth but reads 0 / 0.
+    const fun = byCategory.get("fun")!;
+    expect(fun.lastMonth).toBe(0);
+    expect(fun.reference).toBe(0);
+  });
+
+  it("gives a dormant category (no trailing-window spend) a null target even when the dataset has history", () => {
+    // `fun` only spent in the viewed month; food & rent give the dataset
+    // plenty of prior history. `fun` still has no basis for a target → null,
+    // so its bar stays neutral rather than going red on the first dollar.
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    const fun = byCategory.get("fun")!;
+    expect(fun.lastMonth).toBe(0);
+    expect(fun.reference).toBe(0);
+    expect(fun.implicitTarget).toBeNull();
+  });
+
+  it("excludes a zero-spend prior month from the average divisor", () => {
+    // rent spent only in January; Feb and Mar are inactive, so the average is
+    // over the one active month (120000/1), not the whole window (120000/3).
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    expect(byCategory.get("rent")!.reference).toBe(120000);
+  });
+
+  it("averages Vlad's worked examples over active months", () => {
+    // Single category viewed in April; vary spend across Jan/Feb/Mar.
+    const c: Category[] = [
+      { id: "x", name: "X", group: "Fixed", archived: false, sortOrder: 0, assigned: null },
+    ];
+    const mar = (n: number) => expense({ id: "m", amount: -n, categoryId: "x", datetime: iso(2026, 2, 12) });
+    const feb = (n: number) => expense({ id: "f", amount: -n, categoryId: "x", datetime: iso(2026, 1, 12) });
+    const jan = (n: number) => expense({ id: "j", amount: -n, categoryId: "x", datetime: iso(2026, 0, 12) });
+
+    // $400, 0, 0 → one active month → $400.
+    expect(
+      getCategoryHistoricalStats([mar(40000)], c, APRIL).byCategory.get("x")!.reference,
+    ).toBe(40000);
+    // $200, $400, 0 → two active months → $600 / 2 = $300.
+    expect(
+      getCategoryHistoricalStats([feb(20000), mar(40000)], c, APRIL).byCategory.get("x")!.reference,
+    ).toBe(30000);
+    // All three $0 (no spend at all) → 0 → null target, untargeted.
+    const empty = getCategoryHistoricalStats([], c, APRIL).byCategory.get("x")!;
+    expect(empty.reference).toBe(0);
+    expect(empty.implicitTarget).toBeNull();
+    // Guard the divisor isn't a fixed 3: $200 + $400 over two active months
+    // would be $200 under /3, but is $300 under /activeCount.
+    expect(
+      getCategoryHistoricalStats([jan(20000), feb(40000)], c, APRIL).byCategory.get("x")!.reference,
+    ).not.toBe(20000);
+  });
+
+  it("rounds reference to integer cents", () => {
+    // Three active months summing to 30001 → 30001/3 = 10000.33.
+    const c: Category[] = [{ id: "x", name: "X", group: "Fixed", archived: false, sortOrder: 0, assigned: null }];
+    const t = [
+      expense({ id: "x1", amount: -10000, categoryId: "x", datetime: iso(2026, 0, 10) }),
+      expense({ id: "x2", amount: -10000, categoryId: "x", datetime: iso(2026, 1, 10) }),
+      expense({ id: "x3", amount: -10001, categoryId: "x", datetime: iso(2026, 2, 10) }),
+    ];
+    const { byCategory } = getCategoryHistoricalStats(t, c, APRIL);
+    expect(byCategory.get("x")!.reference).toBe(10000); // round(10000.33)
+    expect(Number.isInteger(byCategory.get("x")!.reference)).toBe(true);
+  });
+
+  it("excludes Income and archived categories from the result", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    expect(byCategory.has("pay")).toBe(false);
+    expect(byCategory.has("old")).toBe(false);
+    expect([...byCategory.keys()].sort()).toEqual(["food", "fun", "rent"]);
+  });
+
+  it("ignores income, archived-category, and uncategorized spend in history", () => {
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, APRIL);
+    // If any of those leaked, food/rent targets would shift — assert the
+    // clean values hold.
+    expect(byCategory.get("food")!.implicitTarget).toBe(30000);
+    expect(byCategory.get("rent")!.implicitTarget).toBe(120000);
+  });
+
+  it("returns null implicitTarget for every row when there is no history", () => {
+    // Only the viewed month has spend → no trailing-window basis for any
+    // category, so every target is null.
+    const onlyViewed = [
+      expense({ id: "v1", amount: -50000, categoryId: "food", datetime: iso(2026, 3, 10) }),
+    ];
+    const { byCategory } = getCategoryHistoricalStats(onlyViewed, cats, APRIL);
+    for (const stat of byCategory.values()) {
+      expect(stat.lastMonth).toBe(0);
+      expect(stat.reference).toBe(0);
+      expect(stat.implicitTarget).toBeNull();
+    }
+  });
+
+  it("returns null targets when there are no transactions at all", () => {
+    const { byCategory } = getCategoryHistoricalStats([], cats, APRIL);
+    expect(byCategory.get("food")!.implicitTarget).toBeNull();
+  });
+
+  it("looks back from the viewed month, not from today, when viewing a past month", () => {
+    // View February 2026. History is the months before Feb → only January
+    // counts; March (which is AFTER Feb) must be excluded even though it has
+    // food spend in the fixture.
+    const FEB: DateRange = {
+      start: new Date(2026, 1, 1),
+      end: new Date(2026, 2, 1),
+    };
+    const { byCategory } = getCategoryHistoricalStats(txns, cats, FEB);
+    const food = byCategory.get("food")!;
+    expect(food.lastMonth).toBe(10000); // January, not March
+    expect(food.reference).toBe(10000); // 10000/1 active month (Mar excluded as post-Feb)
+    expect(food.implicitTarget).toBe(10000); // max(10000, 10000)
+  });
+
+  describe("comparison basis", () => {
+    // One category, viewed Jan 2026, with spend in each of the 12 prior
+    // months (Jan–Dec 2025). Picking distinct values lets each window's
+    // average pin down exactly which months it summed.
+    const oneCat: Category[] = [
+      { id: "x", name: "X", group: "Fixed", archived: false, sortOrder: 0, assigned: null },
+    ];
+    const JAN_2026: DateRange = {
+      start: new Date(2026, 0, 1),
+      end: new Date(2026, 1, 1),
+    };
+    // monthIndex 0..11 → spend (1000 * (monthIndex + 1)) cents in 2025.
+    const trailingYear: Transaction[] = Array.from({ length: 12 }, (_, m) =>
+      expense({
+        id: `m${m}`,
+        amount: -((m + 1) * 1000),
+        categoryId: "x",
+        datetime: iso(2025, m, 15),
+      }),
+    );
+    const ref = (basis: BudgetBasis | undefined, t: Transaction[] = trailingYear) =>
+      getCategoryHistoricalStats(t, oneCat, JAN_2026, basis).byCategory.get("x")!.reference;
+
+    it("defaults to trailing3 — omitting basis equals passing it explicitly", () => {
+      // Dec/Nov/Oct 2025 = 12000/11000/10000 → mean 11000.
+      expect(ref(undefined)).toBe(11000);
+      expect(ref(undefined)).toBe(ref("trailing3"));
+    });
+
+    it("trailing6 averages the six full months before the viewed month", () => {
+      // Jul–Dec 2025 = 7000..12000 → (7+8+9+10+11+12)*1000/6 = 9500.
+      expect(ref("trailing6")).toBe(9500);
+    });
+
+    it("trailing12 averages the twelve full months before the viewed month", () => {
+      // Jan–Dec 2025 = 1000..12000 → sum 78000 / 12 = 6500.
+      expect(ref("trailing12")).toBe(6500);
+    });
+
+    it("sameMonthLastYear uses the single month exactly 12 months back", () => {
+      // Viewed Jan 2026 → Jan 2025 only = 1000.
+      expect(ref("sameMonthLastYear")).toBe(1000);
+    });
+
+    it("sameMonthLastYear is seasonal: viewing Dec 2025 references Dec 2024", () => {
+      const DEC_2025: DateRange = {
+        start: new Date(2025, 11, 1),
+        end: new Date(2026, 0, 1),
+      };
+      const t = [
+        expense({ id: "dec24", amount: -77000, categoryId: "x", datetime: iso(2024, 11, 10) }),
+        // A nearer month that the trailing windows would catch but the
+        // seasonal basis must ignore.
+        expense({ id: "nov25", amount: -5000, categoryId: "x", datetime: iso(2025, 10, 10) }),
+      ];
+      const stats = getCategoryHistoricalStats(t, oneCat, DEC_2025, "sameMonthLastYear");
+      expect(stats.byCategory.get("x")!.reference).toBe(77000); // Dec 2024, not Nov 2025
+    });
+
+    it("sameMonthLastYear yields 0 when that one month had no spend", () => {
+      // Use a dataset whose only spend is adjacent to the target month, so the
+      // target month itself is $0.
+      const t = [
+        expense({ id: "near", amount: -9000, categoryId: "x", datetime: iso(2025, 1, 10) }), // Feb 2025
+      ];
+      // Viewed Jan 2026 → references Jan 2025, which is empty here.
+      const stat = getCategoryHistoricalStats(t, oneCat, JAN_2026, "sameMonthLastYear").byCategory.get("x")!;
+      expect(stat.reference).toBe(0);
+      expect(stat.implicitTarget).toBeNull();
+    });
+
+    it("applies the active-months rule within a longer window", () => {
+      // Spend in only two of the trailing six months (Aug + Dec 2025); the
+      // four silent months must not dilute the divisor.
+      const t = [
+        expense({ id: "aug", amount: -20000, categoryId: "x", datetime: iso(2025, 7, 10) }),
+        expense({ id: "dec", amount: -40000, categoryId: "x", datetime: iso(2025, 11, 10) }),
+      ];
+      // (20000 + 40000) / 2 active = 30000, not /6 = 10000.
+      expect(ref("trailing6", t)).toBe(30000);
+    });
+
+    it("leaves lastMonth basis-independent — always the month before viewed", () => {
+      // Whatever the basis, lastMonth is Dec 2025 = 12000 here.
+      const last = (basis: BudgetBasis) =>
+        getCategoryHistoricalStats(trailingYear, oneCat, JAN_2026, basis).byCategory.get("x")!.lastMonth;
+      expect(last("trailing3")).toBe(12000);
+      expect(last("trailing12")).toBe(12000);
+      expect(last("sameMonthLastYear")).toBe(12000);
+    });
+  });
+});
+
+describe("basisMonths", () => {
+  const viewed = new Date(2026, 0, 1); // Jan 2026
+
+  it("trailing3 → the three full months before viewed, newest first", () => {
+    expect(basisMonths("trailing3", viewed)).toEqual(["2025-12", "2025-11", "2025-10"]);
+  });
+
+  it("trailing6 → six months before viewed", () => {
+    expect(basisMonths("trailing6", viewed)).toEqual([
+      "2025-12", "2025-11", "2025-10", "2025-09", "2025-08", "2025-07",
+    ]);
+  });
+
+  it("trailing12 → twelve months before viewed, spanning the year boundary", () => {
+    expect(basisMonths("trailing12", viewed)).toEqual([
+      "2025-12", "2025-11", "2025-10", "2025-09", "2025-08", "2025-07",
+      "2025-06", "2025-05", "2025-04", "2025-03", "2025-02", "2025-01",
+    ]);
+  });
+
+  it("sameMonthLastYear → a single month exactly 12 months back", () => {
+    expect(basisMonths("sameMonthLastYear", viewed)).toEqual(["2025-01"]);
+  });
+
+  it("handles a mid-year viewed month", () => {
+    const may = new Date(2026, 4, 1); // May 2026
+    expect(basisMonths("trailing3", may)).toEqual(["2026-04", "2026-03", "2026-02"]);
+    expect(basisMonths("sameMonthLastYear", may)).toEqual(["2025-05"]);
+  });
+});
+
+describe("basisLabel", () => {
+  const viewed = new Date(2025, 11, 1); // Dec 2025
+
+  it("labels the trailing bases with their window length", () => {
+    expect(basisLabel("trailing3", viewed)).toBe("3-mo avg");
+    expect(basisLabel("trailing6", viewed)).toBe("6-mo avg");
+    expect(basisLabel("trailing12", viewed)).toBe("12-mo avg");
+  });
+
+  it("resolves sameMonthLastYear to the month it points at", () => {
+    expect(basisLabel("sameMonthLastYear", viewed)).toBe("Dec 2024");
+  });
+
+  it("tracks the viewed month for the seasonal label", () => {
+    expect(basisLabel("sameMonthLastYear", new Date(2026, 2, 1))).toBe("Mar 2025");
+    expect(basisLabel("sameMonthLastYear", new Date(2027, 0, 1))).toBe("Jan 2026");
   });
 });

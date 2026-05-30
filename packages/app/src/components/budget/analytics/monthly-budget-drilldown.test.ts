@@ -2,40 +2,40 @@ import { describe, it, expect } from "vitest";
 import type { Category, DateRange, Transaction } from "@capybudget/core";
 import {
   budgetDrilldownTitle,
+  eligibleBudgetCategoryIds,
   filterForBudgetDrilldown,
-  partitionCategoriesForBudget,
 } from "./monthly-budget-drilldown";
 import { makeAccount, makeCategory, makeTransaction } from "@/test/factories";
 
-// Build a stable category set covering every partition we care about:
-// tracked (assigned !== null), untracked (assigned === null), archived
+// Build a stable category set covering every case the drilldown filter cares
+// about: ordinary budgeted/unbudgeted categories (both eligible), archived
 // (dropped), and Income (dropped). Each gets one or more expenses inside
 // May 2026 plus noise outside it.
 const acc = makeAccount({ id: "acc", name: "Checking" });
 
-const trackedGroceries = makeCategory({
+const budgetedGroceries = makeCategory({
   id: "cat-groceries",
   name: "Groceries",
   group: "Daily Living",
-  assigned: 50000, // tracked
+  assigned: 50000, // explicit budget
 });
-const trackedRent = makeCategory({
+const budgetedRent = makeCategory({
   id: "cat-rent",
   name: "Rent",
   group: "Fixed",
-  assigned: 200000, // tracked
+  assigned: 200000, // explicit budget
 });
-const untrackedSubs = makeCategory({
+const unbudgetedSubs = makeCategory({
   id: "cat-subs",
   name: "Subscriptions",
   group: "Personal",
-  assigned: null, // untracked
+  assigned: null, // no explicit budget
 });
-const untrackedGifts = makeCategory({
+const unbudgetedGifts = makeCategory({
   id: "cat-gifts",
   name: "Gifts",
   group: "Personal",
-  assigned: null, // untracked
+  assigned: null, // no explicit budget
 });
 const archivedOld = makeCategory({
   id: "cat-archived",
@@ -52,10 +52,10 @@ const incomeSalary = makeCategory({
 });
 
 const categories: Category[] = [
-  trackedGroceries,
-  trackedRent,
-  untrackedSubs,
-  untrackedGifts,
+  budgetedGroceries,
+  budgetedRent,
+  unbudgetedSubs,
+  unbudgetedGifts,
   archivedOld,
   incomeSalary,
 ];
@@ -72,11 +72,11 @@ const inApril = (day: number) =>
   new Date(2026, 3, day, 12, 0, 0).toISOString();
 
 const txns: Transaction[] = [
-  // Tracked expenses in range
+  // Budgeted-category expenses in range
   makeTransaction({
     id: "g1",
     accountId: acc.id,
-    categoryId: trackedGroceries.id,
+    categoryId: budgetedGroceries.id,
     type: "expense",
     amount: -1500,
     datetime: inMay(5),
@@ -84,7 +84,7 @@ const txns: Transaction[] = [
   makeTransaction({
     id: "g2",
     accountId: acc.id,
-    categoryId: trackedGroceries.id,
+    categoryId: budgetedGroceries.id,
     type: "expense",
     amount: -800,
     datetime: inMay(12),
@@ -92,16 +92,16 @@ const txns: Transaction[] = [
   makeTransaction({
     id: "r1",
     accountId: acc.id,
-    categoryId: trackedRent.id,
+    categoryId: budgetedRent.id,
     type: "expense",
     amount: -200000,
     datetime: inMay(1),
   }),
-  // Untracked expenses in range
+  // Unbudgeted-category expenses in range
   makeTransaction({
     id: "s1",
     accountId: acc.id,
-    categoryId: untrackedSubs.id,
+    categoryId: unbudgetedSubs.id,
     type: "expense",
     amount: -1000,
     datetime: inMay(10),
@@ -109,7 +109,7 @@ const txns: Transaction[] = [
   makeTransaction({
     id: "gf1",
     accountId: acc.id,
-    categoryId: untrackedGifts.id,
+    categoryId: unbudgetedGifts.id,
     type: "expense",
     amount: -2500,
     datetime: inMay(20),
@@ -127,7 +127,7 @@ const txns: Transaction[] = [
   makeTransaction({
     id: "apr",
     accountId: acc.id,
-    categoryId: trackedGroceries.id,
+    categoryId: budgetedGroceries.id,
     type: "expense",
     amount: -700,
     datetime: inApril(28),
@@ -136,7 +136,7 @@ const txns: Transaction[] = [
   // (archived categories drop from the budget rows but their txns still
   // exist; `getMonthlyBudgetSummary` skips them via the `eligible` filter).
   // The drilldown must do the same: an archived expense should NOT appear
-  // in tracked / other buckets.
+  // in any drilldown.
   makeTransaction({
     id: "old",
     accountId: acc.id,
@@ -156,76 +156,46 @@ const txns: Transaction[] = [
   }),
 ];
 
-describe("partitionCategoriesForBudget", () => {
-  const partition = partitionCategoriesForBudget(categories);
+describe("eligibleBudgetCategoryIds", () => {
+  const ids = eligibleBudgetCategoryIds(categories);
 
-  it("puts non-archived non-Income categories with assigned !== null into trackedIds", () => {
-    expect(partition.trackedIds.has(trackedGroceries.id)).toBe(true);
-    expect(partition.trackedIds.has(trackedRent.id)).toBe(true);
+  it("includes every non-archived non-Income category regardless of budget", () => {
+    expect(ids.has(budgetedGroceries.id)).toBe(true);
+    expect(ids.has(budgetedRent.id)).toBe(true);
+    expect(ids.has(unbudgetedSubs.id)).toBe(true);
+    expect(ids.has(unbudgetedGifts.id)).toBe(true);
   });
 
-  it("puts non-archived non-Income categories with assigned === null into untrackedIds", () => {
-    expect(partition.untrackedIds.has(untrackedSubs.id)).toBe(true);
-    expect(partition.untrackedIds.has(untrackedGifts.id)).toBe(true);
+  it("excludes archived categories", () => {
+    expect(ids.has(archivedOld.id)).toBe(false);
   });
 
-  it("excludes archived categories from both sets", () => {
-    expect(partition.trackedIds.has(archivedOld.id)).toBe(false);
-    expect(partition.untrackedIds.has(archivedOld.id)).toBe(false);
-  });
-
-  it("excludes Income-group categories from both sets", () => {
-    expect(partition.trackedIds.has(incomeSalary.id)).toBe(false);
-    expect(partition.untrackedIds.has(incomeSalary.id)).toBe(false);
+  it("excludes Income-group categories", () => {
+    expect(ids.has(incomeSalary.id)).toBe(false);
   });
 });
 
 describe("filterForBudgetDrilldown", () => {
-  const partition = partitionCategoriesForBudget(categories);
+  const eligible = eligibleBudgetCategoryIds(categories);
 
   describe("kind: category", () => {
     it("returns only expenses for the chosen category in range", () => {
       const out = filterForBudgetDrilldown(
         txns,
         may2026,
-        { kind: "category", category: trackedGroceries },
-        partition,
+        { kind: "category", category: budgetedGroceries },
+        eligible,
       );
       expect(out.map((t) => t.id).sort()).toEqual(["g1", "g2"]);
       expect(out.find((t) => t.id === "apr")).toBeUndefined(); // out of range
     });
   });
 
-  describe("kind: tracked", () => {
-    const out = filterForBudgetDrilldown(txns, may2026, { kind: "tracked" }, partition);
+  describe("kind: all", () => {
+    const out = filterForBudgetDrilldown(txns, may2026, { kind: "all" }, eligible);
 
-    it("returns expenses across every tracked category", () => {
-      expect(out.map((t) => t.id).sort()).toEqual(["g1", "g2", "r1"]);
-    });
-
-    it("excludes untracked-category expenses", () => {
-      expect(out.find((t) => t.id === "s1")).toBeUndefined();
-      expect(out.find((t) => t.id === "gf1")).toBeUndefined();
-    });
-
-    it("excludes income, uncategorized, archived, and out-of-range entries", () => {
-      expect(out.find((t) => t.id === "sal")).toBeUndefined();
-      expect(out.find((t) => t.id === "uncat")).toBeUndefined();
-      expect(out.find((t) => t.id === "old")).toBeUndefined();
-      expect(out.find((t) => t.id === "apr")).toBeUndefined();
-    });
-  });
-
-  describe("kind: other", () => {
-    const out = filterForBudgetDrilldown(txns, may2026, { kind: "other" }, partition);
-
-    it("returns expenses across every untracked category", () => {
-      expect(out.map((t) => t.id).sort()).toEqual(["gf1", "s1"]);
-    });
-
-    it("excludes tracked-category expenses", () => {
-      expect(out.find((t) => t.id === "g1")).toBeUndefined();
-      expect(out.find((t) => t.id === "r1")).toBeUndefined();
+    it("returns expenses across every eligible category, budgeted or not", () => {
+      expect(out.map((t) => t.id).sort()).toEqual(["g1", "g2", "gf1", "r1", "s1"]);
     });
 
     it("excludes income, uncategorized, archived, and out-of-range entries", () => {
@@ -240,12 +210,11 @@ describe("filterForBudgetDrilldown", () => {
 describe("budgetDrilldownTitle", () => {
   it("uses the category name for kind: category", () => {
     expect(
-      budgetDrilldownTitle({ kind: "category", category: trackedGroceries }),
+      budgetDrilldownTitle({ kind: "category", category: budgetedGroceries }),
     ).toBe("Groceries");
   });
 
-  it("uses the KPI labels for the bucket drilldowns", () => {
-    expect(budgetDrilldownTitle({ kind: "tracked" })).toBe("Spent (tracked)");
-    expect(budgetDrilldownTitle({ kind: "other" })).toBe("Other Spending");
+  it("labels the all-spend drilldown", () => {
+    expect(budgetDrilldownTitle({ kind: "all" })).toBe("Spent this month");
   });
 });

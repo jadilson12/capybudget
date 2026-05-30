@@ -1,6 +1,7 @@
 // Types
 export type {
   BudgetMeta,
+  BudgetBasis,
   RecentBudget,
   AccountType,
   Account,
@@ -9,6 +10,7 @@ export type {
   TransactionType,
   Transaction,
 } from "./types";
+export { BUDGET_BASES, BASIS_OPTION_LABELS } from "./types";
 
 // Money utilities
 export {
@@ -150,6 +152,8 @@ export type {
   CategoryTrendsResult,
   CategoryMonthSummary,
   MonthlyBudgetSummary,
+  CategoryHistoricalStats,
+  CategoryHistoricalStatsResult,
 } from "./analytics";
 export {
   ensureMinMonths,
@@ -162,4 +166,7 @@ export {
   getTopMerchants,
   getCategoryTrends,
   getMonthlyBudgetSummary,
+  getCategoryHistoricalStats,
+  basisMonths,
+  basisLabel,
 } from "./analytics";
