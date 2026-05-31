@@ -14,16 +14,16 @@ import { useImportInstructions } from "@/hooks/use-custom-instructions";
 import { useImportMerge } from "@/hooks/use-import-merge";
 import { useImportData } from "@/hooks/use-import-data";
 import { useImportStore } from "@/stores/import-store";
-import { useBudgetRepository } from "@/providers/repository-provider";
+import { useBudgetRepository } from "@/contexts/repository-context";
 import { tauriFileAdapter } from "../../../../../src/adapters/tauri-file-adapter";
 import { ENRICH_SYSTEM_PROMPT } from "@capybudget/intelligence";
 import { formatMoney } from "@capybudget/core";
+import { ImportTable } from "./import-table";
 import {
-  ImportTable,
   sortImportTransactions,
   filterImportTransactions,
   type ImportSortConfig,
-} from "./import-table";
+} from "@/components/import/import-table-utils";
 import { ImportMapping } from "./import-mapping";
 import { Search, X, FileUp, Sparkles, Loader2, GitMerge, AlertTriangle, Copy } from "lucide-react";
 
