@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import Analytics from '@vercel/analytics/astro';
 
 interface Props {
   title: string;
@@ -128,6 +129,7 @@ const year = new Date().getFullYear();
         localStorage.setItem('theme', next);
       });
     </script>
+    <Analytics />
   </body>
 </html>
 
