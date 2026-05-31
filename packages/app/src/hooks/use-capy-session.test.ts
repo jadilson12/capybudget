@@ -111,6 +111,33 @@ describe("useCapySession session teardown", () => {
     expect(firstSession.killSpy).toHaveBeenCalled()
   })
 
+  it("clears the on-screen conversation when the provider or model changes", () => {
+    // The new session has no memory of the prior turns, so carrying the old
+    // messages forward would show a continuous thread the new model never saw.
+    useIntelligenceStore.setState({
+      hydrated: true,
+      config: {
+        ...DEFAULT_INTELLIGENCE_CONFIG,
+        provider: "anthropic",
+        anthropic: { apiKey: "sk-x", model: "claude-sonnet-4-6" },
+      },
+    })
+
+    const { result } = renderHook(() => useCapySession(baseOpts))
+
+    // A user turn + the assistant's reply bubble are on screen.
+    act(() => {
+      result.current.sendMessage("what model are you?")
+    })
+    expect(result.current.messages.length).toBeGreaterThan(0)
+
+    // Swap the model within the same provider — fresh chat.
+    act(() => {
+      useIntelligenceStore.getState().setAnthropicModel("claude-opus-4-8")
+    })
+    expect(result.current.messages).toEqual([])
+  })
+
   it("kills the session when the Anthropic model changes", () => {
     useIntelligenceStore.setState({
       hydrated: true,
@@ -131,7 +158,7 @@ describe("useCapySession session teardown", () => {
 
     // Swap Sonnet → Opus within the same provider.
     act(() => {
-      useIntelligenceStore.getState().setAnthropicModel("claude-opus-4-7")
+      useIntelligenceStore.getState().setAnthropicModel("claude-opus-4-8")
     })
     expect(firstSession.killSpy).toHaveBeenCalled()
   })
@@ -156,6 +183,32 @@ describe("useCapySession session teardown", () => {
 
     act(() => {
       useIntelligenceStore.getState().setOpenAiModel("gpt-5-pro")
+    })
+    expect(firstSession.killSpy).toHaveBeenCalled()
+  })
+
+  it("kills the session when the Claude Code model changes", () => {
+    useIntelligenceStore.setState({
+      hydrated: true,
+      config: {
+        ...DEFAULT_INTELLIGENCE_CONFIG,
+        provider: "claude-cli",
+        claudeCli: { model: "" },
+      },
+    })
+
+    const { result } = renderHook(() => useCapySession(baseOpts))
+
+    act(() => {
+      result.current.sendMessage("hi")
+    })
+    expect(createdSessions).toHaveLength(1)
+    const firstSession = createdSessions[0]
+
+    // Pick a specific CLI model — the signature shifts from
+    // `claude-cli:` to `claude-cli:opus`, forcing a rebuild.
+    act(() => {
+      useIntelligenceStore.getState().setClaudeCliModel("opus")
     })
     expect(firstSession.killSpy).toHaveBeenCalled()
   })

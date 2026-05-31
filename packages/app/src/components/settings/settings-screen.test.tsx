@@ -6,8 +6,10 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { DEFAULT_INTELLIGENCE_CONFIG } from "@capybudget/intelligence"
 
 // Suppress sonner toasts during tests (must be hoisted via vi.mock).
@@ -39,19 +41,29 @@ import {
 
 // ── Test rendering helper ───────────────────────────────
 
-async function renderSettings(initialPath: string = "/settings") {
+async function renderSettings(
+  initialPath: string = "/budget/settings?path=/test&name=Test",
+) {
   const rootRoute = createRootRoute()
-  const settingsRoute = createRoute({
+  // Settings reads path/name from the /budget search context and routes back to
+  // the budget, so mount it under a matching parent route.
+  const budgetRoute = createRoute({
     getParentRoute: () => rootRoute,
+    path: "/budget",
+    validateSearch: (search: Record<string, unknown>) => ({
+      path: (search.path as string) ?? "",
+      name: (search.name as string) ?? "Budget",
+    }),
+    component: () => <Outlet />,
+  })
+  const settingsRoute = createRoute({
+    getParentRoute: () => budgetRoute,
     path: "/settings",
     component: SettingsScreen,
   })
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
-    component: () => <div>Home</div>,
-  })
-  const routeTree = rootRoute.addChildren([indexRoute, settingsRoute])
+  const routeTree = rootRoute.addChildren([
+    budgetRoute.addChildren([settingsRoute]),
+  ])
 
   const router = createRouter({
     routeTree,
@@ -59,7 +71,14 @@ async function renderSettings(initialPath: string = "/settings") {
   })
 
   await router.load()
-  const result = render(<RouterProvider router={router} />)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const result = render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
   return { ...result, router }
 }
 
@@ -93,6 +112,63 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("Claude Code")).toBeInTheDocument()
     expect(screen.getByText("Anthropic API")).toBeInTheDocument()
     expect(screen.getByText("OpenAI API")).toBeInTheDocument()
+  })
+
+  it("orders providers Off / Anthropic / OpenAI / Claude Code", async () => {
+    await renderSettings()
+
+    const labels = screen
+      .getAllByText(/^(Off|Anthropic API|OpenAI API|Claude Code)$/)
+      .map((el) => el.textContent)
+    expect(labels).toEqual([
+      "Off",
+      "Anthropic API",
+      "OpenAI API",
+      "Claude Code",
+    ])
+  })
+
+  it("badges Claude Code as advanced", async () => {
+    await renderSettings()
+    expect(screen.getByText("advanced")).toBeInTheDocument()
+  })
+
+  it("exposes a model selector for Claude Code", async () => {
+    recheckMock.mockResolvedValue(true)
+    useIntelligenceStore.setState({
+      hydrated: true,
+      config: { ...DEFAULT_INTELLIGENCE_CONFIG, provider: "claude-cli" },
+    })
+    await renderSettings()
+
+    // The shared ModelField renders a Model label + custom-model toggle.
+    expect(await screen.findByLabelText("Model")).toBeInTheDocument()
+    expect(screen.getByLabelText("Use a custom model")).toBeInTheDocument()
+  })
+
+  it("Claude Code custom-model field accepts a full model ID", async () => {
+    const user = userEvent.setup()
+    recheckMock.mockResolvedValue(true)
+    useIntelligenceStore.setState({
+      hydrated: true,
+      config: { ...DEFAULT_INTELLIGENCE_CONFIG, provider: "claude-cli" },
+    })
+    await renderSettings()
+
+    await user.click(await screen.findByLabelText("Use a custom model"))
+    const input = screen.getByPlaceholderText("model-identifier")
+    await user.type(input, "claude-opus-4-8")
+
+    await waitFor(() => {
+      expect(useIntelligenceStore.getState().config.claudeCli.model).toBe(
+        "claude-opus-4-8",
+      )
+    })
+  })
+
+  it("renders the chat-instructions editor in the Intelligence section", async () => {
+    await renderSettings()
+    expect(screen.getByText("Chat instructions")).toBeInTheDocument()
   })
 
   it("'Off' is the selected radio for first-run users", async () => {

@@ -10,6 +10,10 @@ import {
 } from "@tanstack/react-router"
 import { CapyOverlay } from "./capy-overlay"
 import {
+  CapySessionContext,
+  type CapySessionContextValue,
+} from "@/contexts/capy-session-context"
+import {
   useIntelligenceStore,
   _resetIntelligenceStoreForTests,
   _setStoreLoaderForTests,
@@ -51,36 +55,51 @@ async function mountOverlay({
   onStop = () => {},
   onNewChat = () => {},
 }: MountOptions = {}) {
+  // The overlay now consumes its session from CapySessionProvider; inject a
+  // test value directly so each test controls messages / streaming / callbacks.
+  const sessionValue: CapySessionContextValue = {
+    messages,
+    isStreaming,
+    sendMessage: onSend,
+    stopStreaming: onStop,
+    newChat: onNewChat,
+    open,
+    setOpen: () => {},
+  }
+
   const rootRoute = createRootRoute()
-  const indexRoute = createRoute({
+  // The overlay reads path/name from the /budget search context and routes
+  // settings to /budget/settings, so mount it under a matching parent.
+  const budgetRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/",
+    path: "/budget",
+    validateSearch: (search: Record<string, unknown>) => ({
+      path: (search.path as string) ?? "",
+      name: (search.name as string) ?? "Budget",
+    }),
     component: () => (
-      <CapyOverlay
-        open={open}
-        onClose={() => {}}
-        messages={messages}
-        isStreaming={isStreaming}
-        onSend={onSend}
-        onStop={onStop}
-        onNewChat={onNewChat}
-        instructions=""
-        onSaveInstructions={async () => {}}
-        commands={[]}
-        onSaveCommands={async () => {}}
-      />
+      <CapySessionContext.Provider value={sessionValue}>
+        <CapyOverlay
+          instructions=""
+          onSaveInstructions={async () => {}}
+          commands={[]}
+          onSaveCommands={async () => {}}
+        />
+      </CapySessionContext.Provider>
     ),
   })
   const settingsRoute = createRoute({
-    getParentRoute: () => rootRoute,
+    getParentRoute: () => budgetRoute,
     path: "/settings",
     component: () => <div>Settings</div>,
   })
 
-  const routeTree = rootRoute.addChildren([indexRoute, settingsRoute])
+  const routeTree = rootRoute.addChildren([
+    budgetRoute.addChildren([settingsRoute]),
+  ])
   const router = createRouter({
     routeTree,
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: ["/budget"] }),
   })
 
   await router.load()
@@ -204,7 +223,7 @@ describe("CapyOverlay empty state", () => {
 })
 
 describe("CapyOverlay click-through behavior", () => {
-  it("clicking the Claude Code chip sets provider and navigates to /settings", async () => {
+  it("clicking the Claude Code chip sets provider and navigates to /budget/settings", async () => {
     const user = userEvent.setup()
     useIntelligenceStore.setState({
       hydrated: true,
@@ -223,11 +242,11 @@ describe("CapyOverlay click-through behavior", () => {
 
     await waitFor(() => {
       expect(useIntelligenceStore.getState().config.provider).toBe("claude-cli")
-      expect(router.state.location.pathname).toBe("/settings")
+      expect(router.state.location.pathname).toBe("/budget/settings")
     })
   })
 
-  it("clicking the Anthropic chip sets provider and navigates to /settings", async () => {
+  it("clicking the Anthropic chip sets provider and navigates to /budget/settings", async () => {
     const user = userEvent.setup()
     useIntelligenceStore.setState({
       hydrated: true,
@@ -239,11 +258,11 @@ describe("CapyOverlay click-through behavior", () => {
 
     await waitFor(() => {
       expect(useIntelligenceStore.getState().config.provider).toBe("anthropic")
-      expect(router.state.location.pathname).toBe("/settings")
+      expect(router.state.location.pathname).toBe("/budget/settings")
     })
   })
 
-  it("clicking the OpenAI chip sets provider and navigates to /settings", async () => {
+  it("clicking the OpenAI chip sets provider and navigates to /budget/settings", async () => {
     const user = userEvent.setup()
     useIntelligenceStore.setState({
       hydrated: true,
@@ -255,7 +274,7 @@ describe("CapyOverlay click-through behavior", () => {
 
     await waitFor(() => {
       expect(useIntelligenceStore.getState().config.provider).toBe("openai")
-      expect(router.state.location.pathname).toBe("/settings")
+      expect(router.state.location.pathname).toBe("/budget/settings")
     })
   })
 
@@ -270,7 +289,7 @@ describe("CapyOverlay click-through behavior", () => {
     await user.click(screen.getByRole("button", { name: /Open settings/i }))
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/settings")
+      expect(router.state.location.pathname).toBe("/budget/settings")
     })
     // Provider must remain untouched.
     expect(useIntelligenceStore.getState().config.provider).toBeNull()

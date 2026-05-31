@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Navigate, Outlet } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BudgetShell } from "@/components/budget/budget-shell";
 import { RepositoryProvider } from "@/contexts/repository-context";
+import { CapySessionProvider } from "@/components/capy/capy-session-provider";
+import { useCustomInstructions } from "@/hooks/use-custom-instructions";
+import { invalidateAfterCapyMutation } from "@/components/budget/capy-invalidation";
+import { useIntelligenceStore } from "@/stores/intelligence-store";
 import { budgetKeys } from "@/hooks/use-budget-data";
 import { createInMemoryRepository } from "@capybudget/persistence";
 import { PROFILES } from "../data/profiles";
@@ -34,10 +37,23 @@ export const Route = createFileRoute("/budget")({
   component: DemoBudgetLayout,
 });
 
+// Demo mirror of the desktop budget layout (session adapter is a stub via vite alias).
 function DemoBudgetLayout() {
   const { path: profileId, name } = Route.useSearch();
   const profile = PROFILES[profileId];
   const queryClient = useQueryClient();
+
+  // Play the seeding beat once per scenario entry. The flag lives in this
+  // persistent layout, so visiting Settings (a sibling of `_shell`) doesn't
+  // remount it and replay the animation. Reset on scenario change during
+  // render to avoid a flash of the previous scenario's shell.
+  const [seeded, setSeeded] = useState(false);
+  const markSeeded = useCallback(() => setSeeded(true), []);
+  const [seededFor, setSeededFor] = useState(profileId);
+  if (seededFor !== profileId) {
+    setSeededFor(profileId);
+    setSeeded(false);
+  }
 
   // One repo per scenario entry: in-app navigation and edits survive, only a
   // hard reload regenerates. This ephemerality is the "safe to mess around"
@@ -52,18 +68,6 @@ function DemoBudgetLayout() {
     return createInMemoryRepository(data);
   }, [profile]);
 
-  const [seeded, setSeeded] = useState(false);
-  const markSeeded = useCallback(() => setSeeded(true), []);
-
-  // Replay the seeding beat whenever the scenario changes, even if the layout
-  // re-renders without remounting (e.g. /budget?path=X → ?path=Y). Reset during
-  // render rather than in an effect to avoid a flash of the previous shell.
-  const [seededFor, setSeededFor] = useState(profileId);
-  if (seededFor !== profileId) {
-    setSeededFor(profileId);
-    setSeeded(false);
-  }
-
   useEffect(() => {
     return () => {
       void repo?.dispose();
@@ -71,17 +75,39 @@ function DemoBudgetLayout() {
     };
   }, [repo, queryClient]);
 
+  const provider = useIntelligenceStore((s) => s.config.provider);
+  const customInstructions = useCustomInstructions(profileId);
+
+  const onDataChanged = useCallback(() => {
+    if (!repo) return;
+    invalidateAfterCapyMutation({
+      provider,
+      repo,
+      invalidateQueries: () => queryClient.invalidateQueries({ queryKey: budgetKeys.all }),
+    });
+  }, [queryClient, repo, provider]);
+
+  const sessionOptions = useMemo(
+    () => ({
+      budgetPath: profileId,
+      budgetName: name,
+      mcpServerPath: "packages/mcp/src/server.ts",
+      customInstructions: customInstructions.instructions,
+      onDataChanged,
+      repo: repo ?? undefined,
+    }),
+    [profileId, name, customInstructions.instructions, onDataChanged, repo],
+  );
+
   if (!profile || !repo) {
     return <Navigate to="/" />;
   }
 
-  if (!seeded) {
-    return <DemoSeedingScreen name={name} onDone={markSeeded} />;
-  }
-
   return (
     <RepositoryProvider key={profileId} value={repo}>
-      <BudgetShell path={profileId} name={name} />
+      <CapySessionProvider key={profileId} options={sessionOptions}>
+        {seeded ? <Outlet /> : <DemoSeedingScreen name={name} onDone={markSeeded} />}
+      </CapySessionProvider>
     </RepositoryProvider>
   );
 }

@@ -1,9 +1,13 @@
-import { useEffect, useMemo } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo } from "react";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { BudgetShell } from "@/components/budget/budget-shell";
 import { RepositoryProvider } from "@/contexts/repository-context";
+import { CapySessionProvider } from "@/components/capy/capy-session-provider";
+import { useCustomInstructions } from "@/hooks/use-custom-instructions";
+import { invalidateAfterCapyMutation } from "@/components/budget/capy-invalidation";
+import { useIntelligenceStore } from "@/stores/intelligence-store";
 import { createCsvRepository } from "@capybudget/persistence";
+import type { DisposableRepository } from "@capybudget/persistence";
 import { tauriFileAdapter } from "../../../../src/adapters/tauri-file-adapter";
 import { budgetKeys } from "@/hooks/use-budget-data";
 
@@ -20,6 +24,8 @@ export const Route = createFileRoute("/budget")({
   component: BudgetLayout,
 });
 
+// Owns the repo + Capy session for the budget subtree so they survive the
+// chrome↔settings swap (disposed only when this layout unmounts).
 function BudgetLayout() {
   const { path, name } = Route.useSearch();
   const queryClient = useQueryClient();
@@ -32,9 +38,35 @@ function BudgetLayout() {
     };
   }, [repo, queryClient]);
 
+  const provider = useIntelligenceStore((s) => s.config.provider);
+  const customInstructions = useCustomInstructions(path);
+
+  const onDataChanged = useCallback(() => {
+    invalidateAfterCapyMutation({
+      provider,
+      repo: repo as DisposableRepository,
+      invalidateQueries: () => queryClient.invalidateQueries({ queryKey: budgetKeys.all }),
+    });
+  }, [queryClient, repo, provider]);
+
+  const sessionOptions = useMemo(
+    () => ({
+      budgetPath: path,
+      budgetName: name,
+      mcpServerPath: "packages/mcp/src/server.ts",
+      customInstructions: customInstructions.instructions,
+      onDataChanged,
+      repo,
+      fileAdapter: tauriFileAdapter,
+    }),
+    [path, name, customInstructions.instructions, onDataChanged, repo],
+  );
+
   return (
-    <RepositoryProvider value={repo}>
-      <BudgetShell path={path} name={name} />
+    <RepositoryProvider key={path} value={repo}>
+      <CapySessionProvider key={path} options={sessionOptions}>
+        <Outlet />
+      </CapySessionProvider>
     </RepositoryProvider>
   );
 }

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useMatches, useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { Outlet, useMatches, useNavigate, useSearch } from "@tanstack/react-router";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { NavigationRail, type Section } from "@/components/budget/navigation-rail";
 import { Sidebar } from "@/components/budget/sidebar";
@@ -11,23 +10,18 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ColorThemeSwitcher } from "@/components/color-theme-switcher";
 import { CapyButton } from "@/components/capy/capy-button";
 import { CapyOverlay } from "@/components/capy/capy-overlay/capy-overlay";
-import { useCapySession } from "@/hooks/use-capy-session";
 import { BudgetUIProvider, type BudgetUIContextValue } from "@/contexts/budget-context";
+import { useCapySessionContext } from "@/contexts/capy-session-context";
 import {
   useCreateTransaction,
   useUpdateTransaction,
 } from "@/hooks/use-transaction-mutations";
 import { useUndoRedo } from "@/hooks/use-undo-redo";
 import { useReorderAccounts } from "@/hooks/use-account-mutations";
-import { useAccounts, budgetKeys } from "@/hooks/use-budget-data";
+import { useAccounts } from "@/hooks/use-budget-data";
 import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { useCustomCommands } from "@/hooks/use-custom-commands";
-import { useBudgetRepository } from "@/contexts/repository-context";
 import { useImportStore } from "@/stores/import-store";
-import { useIntelligenceStore } from "@/stores/intelligence-store";
-import { invalidateAfterCapyMutation } from "@/components/budget/capy-invalidation";
-import { tauriFileAdapter } from "../../../../../src/adapters/tauri-file-adapter";
-import type { DisposableRepository } from "@capybudget/persistence";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,11 +36,6 @@ import { toast } from "sonner";
 
 declare const __IS_DEMO__: boolean;
 
-interface BudgetShellProps {
-  path: string;
-  name: string;
-}
-
 function shortenPath(path: string, maxLen: number): string {
   const shortened = path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
   if (shortened.length <= maxLen) return shortened;
@@ -56,9 +45,9 @@ function shortenPath(path: string, maxLen: number): string {
   return shortened.slice(0, head) + "…" + shortened.slice(-tail);
 }
 
-export function BudgetShell({ path, name }: BudgetShellProps) {
+export function BudgetShell() {
+  const { path, name } = useSearch({ from: "/budget" });
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const createTxn = useCreateTransaction();
   const updateTxn = useUpdateTransaction();
   const { undo, redo } = useUndoRedo();
@@ -80,34 +69,13 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [capyOpen, setCapyOpen] = useState(false);
   const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
   const [currentAccountId, setCurrentAccountId] = useState<string | undefined>();
 
   const customInstructions = useCustomInstructions(path);
   const customCommands = useCustomCommands(path);
 
-  const repo = useBudgetRepository();
-  const provider = useIntelligenceStore((s) => s.config.provider);
-
-  const invalidateBudgetData = useCallback(() => {
-    invalidateAfterCapyMutation({
-      provider,
-      repo: repo as DisposableRepository,
-      invalidateQueries: () =>
-        queryClient.invalidateQueries({ queryKey: budgetKeys.all }),
-    });
-  }, [queryClient, repo, provider]);
-
-  const capy = useCapySession({
-    budgetPath: path,
-    budgetName: name,
-    mcpServerPath: "packages/mcp/src/server.ts",
-    customInstructions: customInstructions.instructions,
-    onDataChanged: invalidateBudgetData,
-    repo,
-    fileAdapter: tauriFileAdapter,
-  });
+  const { open: capyOpen, setOpen: setCapyOpen } = useCapySessionContext();
 
   const currentAccount = accounts.find((a) => a.id === currentAccountId);
   const isArchivedView = currentAccount?.archived === true;
@@ -148,6 +116,10 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
         e.preventDefault();
         setCapyOpen((prev) => !prev);
       }
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        navigate({ to: "/budget/settings", search: { path, name } });
+      }
       if (e.key === "Escape" && capyOpen) {
         e.preventDefault();
         setCapyOpen(false);
@@ -168,7 +140,7 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleForm, undo, redo, effectiveFormOpen, handleDismissForm, capyOpen]);
+  }, [toggleForm, undo, redo, effectiveFormOpen, handleDismissForm, capyOpen, setCapyOpen, navigate, path, name]);
 
   useEffect(() => {
     if (effectiveFormOpen) {
@@ -369,13 +341,6 @@ export function BudgetShell({ path, name }: BudgetShellProps) {
       </div>
 
       <CapyOverlay
-        open={capyOpen}
-        onClose={() => setCapyOpen(false)}
-        messages={capy.messages}
-        isStreaming={capy.isStreaming}
-        onSend={capy.sendMessage}
-        onStop={capy.stopStreaming}
-        onNewChat={capy.newChat}
         instructions={customInstructions.instructions}
         onSaveInstructions={customInstructions.save}
         commands={customCommands.commands}
