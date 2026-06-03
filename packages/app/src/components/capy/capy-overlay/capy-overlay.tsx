@@ -21,6 +21,7 @@ import { useCapySessionContext } from "@/contexts/capy-session-context"
 import {
   MAX_ATTACHMENT_SIZE,
   MAX_TOTAL_ATTACHMENT_SIZE,
+  PROVIDER_LABELS,
   type FileAttachment,
   type ChatMessage,
   type IntelligenceProvider,
@@ -28,6 +29,8 @@ import {
 import { ConfiguredEmptyState, UnconfiguredEmptyState } from "./capy-empty-states"
 import { MessageBubble } from "./capy-message-bubble"
 import { FileChip } from "./file-chip"
+
+declare const __IS_DEMO__: boolean
 
 // Panel sizing — the desktop default and lower bound. Below `sm:`
 // the panel goes full-width and the resize handle is hidden, which
@@ -295,34 +298,33 @@ export function CapyOverlay({
               Capy
             </h2>
             <div className="mt-0.5 flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-hidden="true" />
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  __IS_DEMO__ || isConfigured ? "bg-green-500" : "bg-muted-foreground/40"
+                }`}
+                aria-hidden="true"
+              />
               <p className="truncate text-xs text-muted-foreground">
-                Your financial assistant
+                {/* Demo seeds claude-cli to power its stubbed chat but presents
+                    AI as "Off" in Settings — show a neutral label, not the seed. */}
+                {__IS_DEMO__
+                  ? "Your AI assistant"
+                  : isConfigured && config.provider
+                    ? PROVIDER_LABELS[config.provider]
+                    : "Not configured"}
               </p>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onNewChat}
-            disabled={messages.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
-            aria-label="New chat"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            New chat
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-            aria-label="Hide panel"
-            title="Hide panel"
-          >
-            <PanelRightClose className="h-4.5 w-4.5" />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-lg p-2.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          aria-label="Hide panel"
+          title="Hide panel"
+        >
+          <PanelRightClose className="h-5 w-5" />
+        </button>
       </div>
 
       {/* Messages */}
@@ -449,12 +451,23 @@ export function CapyOverlay({
               <button
                 type="button"
                 onClick={() => setInstructionsOpen(true)}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors cursor-pointer"
+                className="action-link inline-flex items-center gap-1 text-xs cursor-pointer"
                 aria-label="Custom instructions"
               >
                 <Settings2 className="h-3 w-3" />
                 Instructions
               </button>
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={onNewChat}
+                  className="action-link inline-flex items-center gap-1 text-xs cursor-pointer"
+                  aria-label="New chat"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  New chat
+                </button>
+              )}
             </div>
             <p className="text-xs text-muted-foreground/40">
               Shift + Enter for new line
