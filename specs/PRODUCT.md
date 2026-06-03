@@ -62,7 +62,3 @@ Accounts grouped by type: Cash, Checking, Savings, Credit, Investment, Loans, Ar
 ## UX & Visual Design
 
 See `FRONTEND_DESIGN.md` for interaction patterns, color scheme, typography, and accessibility guidelines.
-
----
-
-**Maintenance note.** This file is embedded in full into Capy's chat system prompt as the always-on product brief — see `packages/intelligence/src/prompts/chat.ts`. When editing the feature inventory above, the change reaches every chat session on the next prompt build. Make sure additions/removals read well as Capy's working knowledge of what the app can do.

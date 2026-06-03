@@ -126,7 +126,7 @@ Be explicit about consequences. Warn when deleting a transfer (both legs go), de
 
 ### Empty States
 
-Guide the user: prompt to create first account, first transaction, or explain empty filter results. When adding a transaction with no accounts, intercept and trigger account creation.
+Blank states guide the user toward the next step: prompt to create a first account, a first transaction, or explain empty filter results. When adding a transaction with no accounts, intercept and trigger account creation.
 
 ## Typography
 
