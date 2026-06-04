@@ -170,3 +170,27 @@ export {
   basisMonths,
   basisLabel,
 } from "./analytics/analytics";
+
+// Transaction search (fuzzy cross-field + money matcher)
+export type { SearchContext } from "./analytics/search";
+export {
+  matchesMoney,
+  matchesTransaction,
+  searchTransactions,
+} from "./analytics/search";
+
+// Transaction grouping (the universal aggregator behind group_transactions)
+export type {
+  GroupDimension,
+  GroupMetric,
+  GroupCadence,
+  TransactionGroup,
+  GroupKeyPart,
+  GroupContext,
+  GroupOptions,
+} from "./analytics/group";
+export {
+  groupTransactions,
+  computeCadence,
+  median,
+} from "./analytics/group";

@@ -2,14 +2,15 @@ import Anthropic from "@anthropic-ai/sdk"
 import { buildRenderToolMap, RENDER_FOLLOWUPS_TOOL_NAME } from "../render-map"
 import { extractErrorMessage } from "../error-message"
 import { runTool, getToolDefinitions, SESSION_TOOL_CALL_BUDGET } from "../tools"
+import type { ToolMode } from "../tools"
 import type { ApiAdapterOptions } from "../factory"
 import type { CapySession } from "../session"
 import type { ContentBlock, MessageContent } from "../types"
 
 const MAX_TOKENS = 8192
 
-function getAnthropicTools(): Anthropic.Tool[] {
-  return getToolDefinitions().map((t) => ({
+function getAnthropicTools(mode: ToolMode): Anthropic.Tool[] {
+  return getToolDefinitions(mode).map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
@@ -131,7 +132,7 @@ export class AnthropicSession implements CapySession {
   }
 
   private async runAgenticLoop(): Promise<void> {
-    const tools = getAnthropicTools()
+    const tools = getAnthropicTools(this.opts.mode)
 
     const completedBlocks: ContentBlock[] = []
     const emitContent = () => {
@@ -148,7 +149,16 @@ export class AnthropicSession implements CapySession {
       const stream = this.client.messages.stream(
         {
           model: this.opts.model,
-          system: this.opts.systemPrompt,
+          // One breakpoint at the end of system caches the whole static prefix
+          // before it — tools, then system — so multi-turn loops re-read it
+          // instead of re-billing ~7-8K tokens of schema every turn.
+          system: [
+            {
+              type: "text",
+              text: this.opts.systemPrompt,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
           messages: this.messages,
           tools,
           max_tokens: MAX_TOKENS,

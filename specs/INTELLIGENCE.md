@@ -132,11 +132,11 @@ All three adapters share `buildRenderToolMap()` from `@capybudget/intelligence` 
 
 Single source of truth shared between transports:
 
-- **Definitions** — tool descriptors (name, description, JSON-Schema input). Both transports consume the same list for ListTools / SDK tool config.
+- **Definitions** — tool descriptors (name, description, JSON-Schema input), 31 in all. `getToolDefinitions(mode?)` is the single source: no argument returns the full surface (what the MCP server exposes); a `mode` (`"chat"` | `"import"`) filters to that mode's tools (see **Mode gating** below).
 - **Dispatch** — `runTool(name, input, ctx) → string`. The MCP server and the API adapters call this with the same signature. `ToolContext` is `{ repo, fileAdapter, budgetPath }`.
 - **Handlers** — per-tool implementations:
-  - **Data tools** — `list_accounts`, `list_transactions` (filters + `sort` + `offset`), `list_categories`, `spending_summary`, `search_merchants`, `transaction_bounds` (count + date range, same filters as `list_transactions`)
-  - **Mutation tools** — full CRUD for transactions / accounts / categories, plus `assign_categories`, `bulk_update_transactions` (account/date/merchant across many rows), `set_category_budget` (sets the explicit `assigned` budget; a category without one still has an implicit target derived from its spending history), `unarchive_account` / `unarchive_category` (reverse archive), `set_net_worth_exclusions` (toggle Net Worth inclusion)
+  - **Data tools** — `list_accounts`, `list_transactions` (filters + `sort` + `offset` + `format: "compact" | "full"`, plus `ids` to fetch exact rows after a scan), `search_transactions` (fuzzy cross-field + money query and structured filters → compact rows), `group_transactions` (the universal aggregator: same filters as search, then `groupBy` one or more dimensions — merchant/category/account/type/month/week/dayOfMonth/amountBucket — and request `metrics` over signed cents, including per-group `cadence` for recurrence; subsumes spending-by-category, merchant rollups, duplicate clusters, and interval analysis), `list_categories`
+  - **Mutation tools** — full CRUD for transactions / accounts / categories, plus `bulk_update_transactions` (category/account/date/merchant across many rows; skips transfers for category/account/merchant). `update_account` carries `archived` (archiving fails on a non-zero balance) and `excludeFromNetWorth`. `update_category` carries `archived` and `budgetCents` (the explicit `assigned` budget — `null` untracked, `0` tracked-at-zero, omitted unchanged; a category without one still has an implicit target derived from its spending history).
   - **Import tools** — `read_import_file`, `write_import_file`, `append_import_file`, `list_import_files` (over `.capy/import/`)
   - **CSV tools** — `analyze_csv`, `preview_transform`, `transform_csv`, `auto_enrich`, `enrich_stats`, `enrich_sample`, `enrich_update`
   - **read_file** — generic budget-folder text reader; mirrors what Claude CLI's built-in `Read` provides natively
@@ -144,6 +144,24 @@ Single source of truth shared between transports:
   - **Render tools** — no-op on dispatch (return `"Rendered."`); the frontend intercepts the `tool_use` event and emits the corresponding ContentBlock
 
 All filesystem access goes through the `FileAdapter` on the context, so the same handler runs against node fs (MCP server) and Tauri fs (API adapters in the renderer). The `FileAdapter` interface covers core CSV repo ops (read/write/rename/join) plus the import-handler ops (`mkdir`, `exists`, `readDir`, `appendFile`, `remove`, `stat`).
+
+### Mode gating
+
+An in-process API session sees only the tools its system prompt can use, so a chat asking "what did I spend on coffee" isn't handed the CSV/enrich pipeline (and doesn't pay to re-send those schemas every turn). The factory threads a `mode` into the API adapters, which pass it to `getToolDefinitions(mode)`:
+
+- **chat** (22 tools) — reads, full CRUD, render tools, `read_file`/`read_spec`, plus `search_transactions` (fuzzy "find all my Apple charges" → compact rows; the prompt also reaches for it on "how much did I spend at X?"), `group_transactions` (spending breakdowns, rollups, recurrence — the prompt steers all aggregation here rather than hand-summing rows), and read-only import visibility (`read_import_file` / `list_import_files`) for staged-import questions. No CSV/enrich/write tools.
+- **import** (16 tools) — the CSV transform + enrich pipeline, the import working-directory writers, `search_transactions` (look up a cryptic description in budget history and inherit the matching rows' merchant + category), `list_accounts`/`list_categories` (transfer-target and category UUIDs), and `read_file`/`read_spec`. Covers both Smart Import sessions (normalize and enrich). No render or live-budget mutation tools.
+
+The membership map lives next to the definitions (`tools/definitions/index.ts`), and its source of truth is the prompts: a tool is in a mode iff that mode's prompt tells the model to call it. The **Claude CLI adapter is not gated** — it routes tools through the MCP server, which stays full-surface. So does the MCP server for external agents.
+
+### Prompt caching
+
+The tools + system prefix is static across a session, so the API adapters cache it instead of re-billing ~7-8K tokens of schema every turn of a multi-turn loop. All per-turn content (the context wrapper, budget snapshot, attachments — see **Context Enrichment**) rides in the user messages, after the prefix, so the prefix stays identical turn-to-turn.
+
+- **Anthropic** marks the system block with `cache_control: { type: "ephemeral" }`. One breakpoint at the end of system caches everything before it in the prefix hierarchy — tools, then system. Cache hits show up as `cache_read_input_tokens` in usage from turn 2 on.
+- **OpenAI** caches eligible prefixes (>~1024 tokens) automatically, no flag — the adapter's job is to keep the prefix byte-stable: the system message is immutable for the session and leads every request, tools follow the same definition order, dynamic content never bakes into either.
+
+This is in-process-adapter only; the Claude CLI manages its own caching.
 
 ### Mutation cache invalidation
 
@@ -154,8 +172,7 @@ The app invalidates caches per mutation tool call (not per turn) so the UI refle
 | Tool | Input | Renders as |
 |---|---|---|
 | `render_table` | `{ headers, rows }` | Data table with amount coloring |
-| `render_bar_chart` | `{ title, data: [{label, value}] }` | Horizontal bar chart |
-| `render_donut_chart` | `{ title, data: [{label, value}] }` | SVG donut chart with legend |
+| `render_chart` | `{ title, type: "bar" \| "donut", data: [{label, value}] }` | Horizontal bar chart or SVG donut chart with legend, per `type` |
 | `render_followups` | `{ chips: [{label, prompt}] }` (1–4 items) | Follow-up suggestion chips after an answer. |
 
 No-ops on the dispatch side — they carry structured data from AI to frontend via `tool_use` events.
@@ -164,7 +181,7 @@ No-ops on the dispatch side — they carry structured data from AI to frontend v
 
 ## MCP Server (External Agents)
 
-The MCP server is a thin transport: it wires the tool definitions to ListTools and `runTool()` to CallTool. Same surface as the in-process API adapters dispatch — Claude Desktop / Cursor / VS Code Copilot users see identical tool behavior.
+The MCP server is a thin transport: it wires the tool definitions to ListTools and `runTool()` to CallTool. It exposes the **full surface** (`getToolDefinitions()` with no mode) — external agents (Claude Desktop / Cursor / VS Code Copilot) drive their own flows and aren't constrained to a single chat/import mode. The in-process API adapters are mode-gated (see **Mode gating**); dispatch behavior is identical across both.
 
 ```json
 {
@@ -281,7 +298,7 @@ Reads the normalized CSV, identifies merchants, matches accounts, and categorize
 
 The `categoryConfidence` field coordinates between AI and user: enrichment writes `"high"` (merchant history match) or `"low"` (keyword inference), and skips rows where confidence is `"high"` (user-confirmed). The UI shows a confidence dot indicator next to each category.
 
-Both sessions use the same `CapySession` interface and the same tool surface, and both open with the shared app-knowledge brief — only the entry-point-specific instructions layered on top change.
+Both sessions use the same `CapySession` interface, run in `import` mode (the same gated tool surface), and open with the shared app-knowledge brief — only the entry-point-specific instructions layered on top change.
 
 ## Session Tool-Call Budget
 

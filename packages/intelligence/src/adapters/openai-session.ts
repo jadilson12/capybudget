@@ -2,14 +2,15 @@ import OpenAI from "openai"
 import { buildRenderToolMap, RENDER_FOLLOWUPS_TOOL_NAME } from "../render-map"
 import { extractErrorMessage } from "../error-message"
 import { runTool, getToolDefinitions, SESSION_TOOL_CALL_BUDGET } from "../tools"
+import type { ToolMode } from "../tools"
 import type { ApiAdapterOptions } from "../factory"
 import type { CapySession } from "../session"
 import type { ContentBlock, MessageContent } from "../types"
 
 const MAX_TOKENS = 8192
 
-function getOpenAiTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return getToolDefinitions().map((t) => ({
+function getOpenAiTools(mode: ToolMode): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return getToolDefinitions(mode).map((t) => ({
     type: "function",
     function: {
       name: t.name,
@@ -141,7 +142,7 @@ export class OpenAiSession implements CapySession {
   }
 
   private async runAgenticLoop(): Promise<void> {
-    const tools = getOpenAiTools()
+    const tools = getOpenAiTools(this.opts.mode)
 
     const completedBlocks: ContentBlock[] = []
     const emitContent = () => {
@@ -156,6 +157,10 @@ export class OpenAiSession implements CapySession {
       this.abortController = new AbortController()
 
       // System prompt kept out of `this.messages` so restart() resets cleanly.
+      // The tools + system prefix must stay byte-identical across turns for
+      // OpenAI's automatic prefix caching to hit — `systemPrompt` is immutable
+      // for the session's life and all per-turn context (budget snapshot, date,
+      // attachments) rides in the user messages of `this.messages`, never here.
       const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
         { role: "system", content: this.opts.systemPrompt },
         ...this.messages,

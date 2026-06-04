@@ -19,7 +19,7 @@ interface FakeTurn {
   tailChunk?: { content: string }
 }
 
-const { mockCreate, queueTurn, lastCreateCall, abortSignals } = vi.hoisted(
+const { mockCreate, queueTurn, lastCreateCall, allCreateCalls, abortSignals } = vi.hoisted(
   () => {
     const queue: FakeTurn[] = []
     const calls: Array<{ messages: unknown; tools: unknown }> = []
@@ -152,6 +152,7 @@ const { mockCreate, queueTurn, lastCreateCall, abortSignals } = vi.hoisted(
       mockCreate: create,
       queueTurn,
       lastCreateCall: () => calls[calls.length - 1],
+      allCreateCalls: () => calls,
       abortSignals: signals,
     }
   },
@@ -187,11 +188,12 @@ vi.mock("../tools", async (importOriginal) => {
 
 import { OpenAiSession } from "./openai-session"
 
-function makeSession() {
+function makeSession(mode: "chat" | "import" = "chat") {
   const events: StreamEvent[] = []
   const session = new OpenAiSession({
     budgetPath: "/budget",
     systemPrompt: "you are capy",
+    mode,
     apiKey: "sk-openai-test",
     model: "gpt-4o",
     onEvent: (e) => events.push(e),
@@ -238,6 +240,34 @@ describe("OpenAiSession", () => {
     const messages = call.messages as Array<{ role: string; content: unknown }>
     expect(messages[0]).toEqual({ role: "system", content: "you are capy" })
     expect(messages[1].role).toBe("user")
+  })
+
+  it("keeps the tools + system prefix byte-stable across turns (prefix caching)", async () => {
+    // OpenAI auto-caches a request's static prefix; the win only lands if that
+    // prefix is identical turn-to-turn. Drive two model turns (tool call → reply)
+    // and assert the tools array and the leading system message are unchanged —
+    // per-turn content rides in the tail messages, never the prefix.
+    queueTurn({
+      toolCallDeltas: [
+        { index: 0, id: "call_1", name: "list_accounts", argFragments: ["{}"] },
+      ],
+      finish_reason: "tool_calls",
+    })
+    queueTurn({ textDeltas: ["Done."], finish_reason: "stop" })
+    mockRunTool.mockResolvedValueOnce("ok")
+
+    const { session } = makeSession()
+    await session.send("How much do I have?")
+
+    // The hoisted `calls` array spans the whole file; this session's two turns
+    // are the last two entries.
+    const all = allCreateCalls()
+    const [turn1, turn2] = all.slice(-2)
+    expect(turn1.tools).toEqual(turn2.tools)
+    const firstSystem = (turn1.messages as Array<unknown>)[0]
+    const secondSystem = (turn2.messages as Array<unknown>)[0]
+    expect(firstSystem).toEqual({ role: "system", content: "you are capy" })
+    expect(secondSystem).toEqual(firstSystem)
   })
 
   it("dispatches a tool call (arguments arrive across many deltas), threads tool_call_id, and continues the loop", async () => {
@@ -343,7 +373,7 @@ describe("OpenAiSession", () => {
         {
           index: 0,
           id: "call_xyz",
-          name: "spending_summary",
+          name: "list_transactions",
           argFragments: [
             '{"start',
             'Date":"',
@@ -359,9 +389,9 @@ describe("OpenAiSession", () => {
 
     mockRunTool.mockResolvedValueOnce("ok")
     const { session } = makeSession()
-    await session.send("Spending in Jan 2025?")
+    await session.send("Transactions in Jan 2025?")
     expect(mockRunTool).toHaveBeenCalledWith(
-      "spending_summary",
+      "list_transactions",
       { startDate: "2025-01-01" },
       expect.anything(),
     )
@@ -631,8 +661,8 @@ describe("OpenAiSession", () => {
         {
           index: 0,
           id: "tc-donut",
-          name: "render_donut_chart",
-          argFragments: ['{"title":"Spending","data":[{"label":"Food","value":50}]}'],
+          name: "render_chart",
+          argFragments: ['{"title":"Spending","type":"donut","data":[{"label":"Food","value":50}]}'],
         },
       ],
       finish_reason: "tool_calls",
@@ -883,5 +913,50 @@ describe("OpenAiSession", () => {
         ok: false,
       },
     ])
+  })
+})
+
+describe("OpenAiSession tool gating", () => {
+  async function toolNamesFor(mode: "chat" | "import"): Promise<string[]> {
+    queueTurn({ textDeltas: ["ok"], finish_reason: "stop" })
+    const { session } = makeSession(mode)
+    await session.send("hi")
+    const tools = lastCreateCall().tools as Array<{ function: { name: string } }>
+    return tools.map((t) => t.function.name)
+  }
+
+  it("chat sends only chat-mode tools — render tools in, import/csv tools out", async () => {
+    const names = await toolNamesFor("chat")
+    expect(names).toContain("render_table")
+    expect(names).toContain("render_chart")
+    expect(names).toContain("render_followups")
+    expect(names).toContain("list_transactions")
+    expect(names).toContain("search_transactions")
+    expect(names).toContain("group_transactions")
+    expect(names).toContain("create_transaction")
+    expect(names).not.toContain("analyze_csv")
+    expect(names).not.toContain("transform_csv")
+    expect(names).not.toContain("enrich_update")
+    expect(names).not.toContain("write_import_file")
+    expect(names).toHaveLength(22)
+  })
+
+  it("import sends only import-mode tools — csv/enrich in, render/CRUD out", async () => {
+    const names = await toolNamesFor("import")
+    expect(names).toContain("analyze_csv")
+    expect(names).toContain("transform_csv")
+    expect(names).toContain("enrich_update")
+    expect(names).toContain("write_import_file")
+    expect(names).not.toContain("render_table")
+    expect(names).not.toContain("render_chart")
+    expect(names).not.toContain("render_followups")
+    expect(names).not.toContain("create_transaction")
+    expect(names).not.toContain("list_transactions")
+    expect(names).toHaveLength(16)
+  })
+
+  it("keeps search_transactions in both modes (both prompts advertise it)", async () => {
+    expect(await toolNamesFor("chat")).toContain("search_transactions")
+    expect(await toolNamesFor("import")).toContain("search_transactions")
   })
 })

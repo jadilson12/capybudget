@@ -10,7 +10,7 @@ export {
   MUTATION_TOOL_NAMES,
   getToolDefinitions,
 } from "./definitions"
-export type { ToolDefinition } from "./definitions"
+export type { ToolDefinition, ToolMode } from "./definitions"
 
 // Dispatch
 export { runTool, isDispatchTool } from "./dispatch"
@@ -32,9 +32,9 @@ export const SESSION_TOOL_CALL_BUDGET = 100
 export {
   handleListAccounts,
   handleListTransactions,
+  handleSearchTransactions,
+  handleGroupTransactions,
   handleListCategories,
-  handleSpendingSummary,
-  handleSearchMerchants,
 } from "./handlers/data"
 export {
   handleCreateTransaction,
@@ -43,16 +43,9 @@ export {
   handleCreateAccount,
   handleUpdateAccount,
   handleDeleteAccount,
-  handleArchiveAccount,
-  handleUnarchiveAccount,
-  handleSetNetWorthExclusions,
   handleCreateCategory,
   handleUpdateCategory,
   handleDeleteCategory,
-  handleArchiveCategory,
-  handleUnarchiveCategory,
-  handleSetCategoryBudget,
-  handleAssignCategories,
   handleBulkUpdateTransactions,
 } from "./handlers/mutation"
 export {

@@ -91,20 +91,15 @@ export {
   handleListAccounts,
   handleListTransactions,
   handleListCategories,
-  handleSpendingSummary,
-  handleSearchMerchants,
   handleCreateTransaction,
   handleUpdateTransaction,
   handleDeleteTransactions,
   handleCreateAccount,
   handleUpdateAccount,
   handleDeleteAccount,
-  handleArchiveAccount,
   handleCreateCategory,
   handleUpdateCategory,
   handleDeleteCategory,
-  handleArchiveCategory,
-  handleAssignCategories,
   handleReadImportFile,
   handleWriteImportFile,
   handleAppendImportFile,
@@ -119,5 +114,5 @@ export {
   handleReadFile,
   handleReadSpec,
 } from "./tools"
-export type { ToolDefinition, ToolContext } from "./tools"
+export type { ToolDefinition, ToolMode, ToolContext } from "./tools"
 

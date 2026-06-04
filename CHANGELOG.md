@@ -11,6 +11,8 @@ CHANGELOG PHILOSOPHY:
 
 ## Unreleased
 
+- **Capy** - New `search_transactions` tool: fuzzy free-text + money search across transactions (same matching as the app's list); `list_transactions` gains a compact row format. Retires `search_merchants` — chat and import enrichment now read merchant + category off matching rows.
+- **Capy** - New `group_transactions` aggregator (#57): group by merchant/category/account/type/month/week/dayOfMonth/amountBucket (multi-key) with count/sum/avg/min/max/median/distinct/cadence metrics; `list_transactions` gains an `ids` fetch param.
 - **Capy** - Fix OpenAI sessions dying after a tool-only turn — an empty terminal completion poisoned the replayed history, so every later message failed.
 - **Capy** - Guard the OpenAI agentic loop against a contradictory `tool_calls` finish with no tool calls, which could spin and burn API tokens.
 - **Capy** - Wide chat tables scroll horizontally instead of squeezing; streaming auto-scroll no longer yanks you back when you scroll up to read (jump-to-latest button re-engages).
@@ -27,7 +29,8 @@ CHANGELOG PHILOSOPHY:
 - **Demo** - SPA fallback so deep links no longer 404 at the edge; a hard refresh always lands on scenario selection instead of a regenerated budget (#53).
 - **Monthly Budget** - Every category budgets itself from spending history; zoned progress bar with green/red zones, history pins, and auto-vs-explicit targets (#49).
 - **Monthly Budget** - Configurable comparison basis (3/6/12-month or same month last year), chosen on the legend and remembered per device (#49).
-- **Capy** - Live cache invalidation per mutation; `list_transactions` gains `sort` + `offset`; new `transaction_bounds` tool.
+- **Capy** - Leaner AI tool surface (40→30 tools): archive/budget/net-worth folded into update tools, charts unified into render_chart.
+- **Capy** - Live cache invalidation per mutation; `list_transactions` gains `sort` + `offset`.
 - **Capy** - Don't drop the in-memory repo cache between in-process mutations — was silently losing all-but-the-last write in multi-tool Anthropic/OpenAI turns.
 - **Capy** - Fix ~30s post-message hang by decoupling loop exit from stream drain across all three adapters (#44).
 - **Capy** - Silence Claude CLI "deliberation" assistant turn via `--disallowedTools` and a voice rule in the chat prompt (#44).
