@@ -244,16 +244,27 @@ export class OpenAiSession implements CapySession {
         emitContent()
       }
 
-      const assistantMessage: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
-        role: "assistant",
-        content: assistantTextOnly.length > 0 ? assistantTextOnly : null,
+      // Only persist a turn that carries text or tool calls. An empty terminal
+      // completion stored as `{content: null}` with no tool_calls is invalid to
+      // OpenAI, and history replays on every send — so one poisons the whole
+      // session. Tool-call turns keep null content (canonical).
+      const hasToolCalls = assistantToolCalls.length > 0
+      if (assistantTextOnly.length > 0 || hasToolCalls) {
+        const assistantMessage: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
+          role: "assistant",
+          content: assistantTextOnly.length > 0 ? assistantTextOnly : null,
+        }
+        if (hasToolCalls) {
+          assistantMessage.tool_calls = assistantToolCalls
+        }
+        this.messages.push(assistantMessage)
       }
-      if (assistantToolCalls.length > 0) {
-        assistantMessage.tool_calls = assistantToolCalls
-      }
-      this.messages.push(assistantMessage)
 
-      if (finishReason !== "tool_calls") return
+      // Exit on a non-tool_calls finish — and on a tool_calls finish with no
+      // tool calls: nothing to execute, history unchanged, so re-sending spins
+      // forever and burns tokens (the tool-call budget counts executions, not
+      // this). Treat the contradiction as terminal.
+      if (finishReason !== "tool_calls" || !hasToolCalls) return
 
       const toolMessages: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = []
       let budgetExhausted = false
