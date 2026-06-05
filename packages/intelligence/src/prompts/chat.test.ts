@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildContext, SYSTEM_PROMPT } from "./chat";
 import { APP_KNOWLEDGE } from "./app-knowledge";
+import { APP_MAP } from "./app-map";
 import { SPECS, SPEC_FILENAMES } from "../specs.generated";
 
 describe("buildContext", () => {
@@ -56,6 +57,15 @@ describe("buildContext", () => {
 describe("SYSTEM_PROMPT", () => {
   it("embeds the shared app-knowledge brief", () => {
     expect(SYSTEM_PROMPT).toContain(APP_KNOWLEDGE);
+  });
+
+  it("embeds the app map so wayfinding questions get the real layout", () => {
+    expect(SYSTEM_PROMPT).toContain(APP_MAP);
+  });
+
+  it("reconciles the act-directly stance for wayfinding questions", () => {
+    expect(SYSTEM_PROMPT).toContain("where");
+    expect(SYSTEM_PROMPT).toContain("never improvise a location");
   });
 
   it("does not embed the full DATA_MODEL.md or PRODUCT.md (those move to read_spec)", () => {

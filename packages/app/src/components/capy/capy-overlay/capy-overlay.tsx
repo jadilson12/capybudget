@@ -310,7 +310,7 @@ export function CapyOverlay({
       aria-label="Capy assistant"
       inert={!open}
       style={isResizable ? { width: `${resize.width}px` } : undefined}
-      className={`fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border/50 bg-background shadow-2xl transition-transform duration-200 ease-out ${
+      className={`@container fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border/50 bg-background shadow-2xl transition-transform duration-200 ease-out ${
         open ? "translate-x-0" : "translate-x-full pointer-events-none"
       } ${resize.isDragging ? "select-none" : ""}`}
       onDragEnter={isConfigured ? handleDragEnter : undefined}
@@ -521,7 +521,7 @@ export function CapyOverlay({
               <button
                 type="button"
                 onClick={() => setInstructionsOpen(true)}
-                className="action-link inline-flex items-center gap-1 text-xs cursor-pointer"
+                className="action-link inline-flex items-center gap-1 text-xs cursor-pointer whitespace-nowrap"
                 aria-label="Custom instructions"
               >
                 <Settings2 className="h-3 w-3" />
@@ -531,7 +531,7 @@ export function CapyOverlay({
                 <button
                   type="button"
                   onClick={onNewChat}
-                  className="action-link inline-flex items-center gap-1 text-xs cursor-pointer"
+                  className="action-link inline-flex items-center gap-1 text-xs cursor-pointer whitespace-nowrap"
                   aria-label="New chat"
                 >
                   <RotateCcw className="h-3 w-3" />
@@ -539,7 +539,10 @@ export function CapyOverlay({
                 </button>
               )}
             </div>
-            <p className="text-xs text-muted-foreground/40">
+            {/* 27rem (432px) sits just under PANEL_MIN_WIDTH (440), so the hint
+             *  shows at the desktop default/minimum and hides only once the panel
+             *  is narrower than that — i.e. mobile full-width. */}
+            <p className="text-xs text-muted-foreground/40 whitespace-nowrap @max-[27rem]:hidden">
               Shift + Enter for new line
             </p>
           </div>
