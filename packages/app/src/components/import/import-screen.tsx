@@ -16,6 +16,14 @@ import {
 import { toast } from "sonner";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useImportRepository, type SourceFileInfo } from "@/hooks/use-import-repository";
 import { useImportStore } from "@/stores/import-store";
 import { useImportInstructions } from "@/hooks/use-custom-instructions";
@@ -75,6 +83,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
 
   const [fileDuplicates, setFileDuplicates] = useState<Record<string, string>>({});
   const [isDragging, setIsDragging] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -370,7 +379,24 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="relative flex h-full flex-col"
+      onDragEnter={showDropZone ? handleDragEnter : undefined}
+      onDragLeave={showDropZone ? handleDragLeave : undefined}
+      onDragOver={showDropZone ? handleDragOver : undefined}
+      onDrop={showDropZone ? handleDrop : undefined}
+    >
+      {/* Overlay frame deliberately mirrors the seed box's dashed treatment
+          so it reads as one frame expanding, not two stacked. */}
+      {showDropZone && isDragging && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
+          <div className="absolute inset-4 flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-brand/50 bg-brand/5 text-brand animate-in fade-in zoom-in-95 duration-150">
+            <FileUp className="h-10 w-10" />
+            <p className="text-lg font-semibold">Drop files to import</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="border-b bg-gradient-to-b from-brand-subtle/40 to-transparent px-6 py-5">
         <div className="flex items-center gap-3">
@@ -385,7 +411,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleCancel}
+              onClick={() => setShowCancelConfirm(true)}
               className="gap-1.5 shrink-0"
             >
               <X className="h-3.5 w-3.5" />
@@ -404,11 +430,7 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
               onOpenSettings={() => navigate({ to: "/budget/settings", search: { path: budgetPath, name: budgetName } })}
               fileInputRef={fileInputRef}
               onFileSelect={handleFileSelect}
-              isDragging={isDragging}
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
+              dragging={isDragging}
               onBrowse={() => fileInputRef.current?.click()}
               sourceFiles={sourceFiles}
               uploadingFiles={uploadingFiles}
@@ -463,6 +485,29 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
 
         </div>
       </div>
+
+      <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Cancel import?</DialogTitle>
+            <DialogDescription>
+              This discards the uploaded files and any transactions Capy has
+              extracted. It can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCancelConfirm(false)}>
+              Keep importing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => { setShowCancelConfirm(false); handleCancel(); }}
+            >
+              Discard import
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );
