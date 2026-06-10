@@ -6,7 +6,8 @@
  * Processes thousands of rows instantly — no AI in the loop.
  */
 
-import type { ImportTransaction } from "./import-types";
+import type { ImportTransaction, StagedRecord } from "./import-types";
+import { buildStaged } from "./build-staged";
 import type {
   CsvMapping,
   ColumnRef,
@@ -39,6 +40,10 @@ export interface TransformError {
 /**
  * Transform parsed CSV rows using a structured mapping.
  *
+ * The CSV path is: apply the mapping → intermediate {@link StagedRecord}s →
+ * {@link buildStaged}. The extraction path produces the same records and feeds
+ * the same builder, so staging invariants live in one place.
+ *
  * @param rows - Array of objects keyed by column header (e.g. from PapaParse)
  * @param mapping - The CsvMapping that defines how to interpret columns
  * @returns Transformed transactions + errors + stats
@@ -48,10 +53,9 @@ export function transformCsv(
   mapping: CsvMapping,
   options?: { startId?: number },
 ): TransformResult {
-  const transactions: ImportTransaction[] = [];
+  const records: StagedRecord[] = [];
   const errors: TransformError[] = [];
   let skipped = 0;
-  const idBase = options?.startId ?? 1;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -64,8 +68,7 @@ export function transformCsv(
     }
 
     try {
-      const txn = transformRow(row, rowNum, mapping, idBase + transactions.length);
-      transactions.push(txn);
+      records.push(mapRowToRecord(row, rowNum, mapping));
     } catch (e) {
       errors.push({
         row: rowNum,
@@ -74,6 +77,8 @@ export function transformCsv(
       });
     }
   }
+
+  const transactions = buildStaged(records, { startId: options?.startId });
 
   return {
     transactions,
@@ -87,15 +92,17 @@ export function transformCsv(
   };
 }
 
-// ── Row transformation ──────────────────────────────────────────
+// ── Row → intermediate record ───────────────────────────────────
 
-function transformRow(
+function mapRowToRecord(
   row: Record<string, string>,
   rowNum: number,
   mapping: CsvMapping,
-  seqId: number,
-): ImportTransaction {
-  const date = parseDate(getColumn(row, mapping.date.column, rowNum), mapping.date.format, rowNum);
+): StagedRecord {
+  const date =
+    "literal" in mapping.date
+      ? mapping.date.literal
+      : parseDate(getColumn(row, mapping.date.column, rowNum), mapping.date.format, rowNum);
   const description = resolveColumnRef(row, mapping.description, rowNum);
   const { amount, isExpense } = parseAmount(row, mapping.amount, mapping.amountFormat, rowNum);
   const type = detectType(row, description, isExpense, mapping.typeDetection);
@@ -103,26 +110,11 @@ function transformRow(
   const sourceCategory = mapping.sourceCategory
     ? resolveColumnRef(row, mapping.sourceCategory, rowNum)
     : "";
-  const memo = mapping.memo ? resolveColumnRef(row, mapping.memo, rowNum) : "";
 
   // Amount sign: outflow/expense negative, inflow/income positive (avoid -0)
   const signedAmount = amount === 0 ? 0 : isExpense ? -Math.abs(amount) : Math.abs(amount);
 
-  return {
-    id: `imp-${seqId}`,
-    date,
-    description,
-    amount: signedAmount,
-    type,
-    sourceAccount,
-    sourceCategory,
-    memo,
-    merchant: "",
-    accountId: "",
-    targetAccountId: "",
-    categoryId: "",
-    categoryConfidence: "",
-  };
+  return { date, amount: signedAmount, type, description, sourceAccount, sourceCategory };
 }
 
 // ── Column resolution ───────────────────────────────────────────
@@ -189,6 +181,10 @@ const DATE_FORMATS: Record<string, (s: string) => string | null> = {
     return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
   },
 };
+
+/** The date-format patterns {@link transformCsv} can parse — the canonical
+ *  vocabulary a model-supplied `date.format` must be constrained to. */
+export const SUPPORTED_DATE_FORMATS: readonly string[] = Object.keys(DATE_FORMATS);
 
 function pad2(s: string): string {
   return s.length === 1 ? `0${s}` : s;
@@ -364,19 +360,46 @@ export function parseCurrencyToCents(
 
 // ── Type detection ──────────────────────────────────────────────
 
+/**
+ * High-confidence transfer phrases checked on every row, independent of the
+ * model-supplied `transferPatterns`. Each phrase is multi-word and anchored —
+ * "transfer" paired with account context, so a merchant that merely contains
+ * the word (e.g. "Transferwise", "Money Transfer Inc") does not false-match,
+ * or a bank's fixed payment phrasing ("payment to crd" is BofA's wording for
+ * intra-bank card payments). The model's patterns are still checked additively
+ * to catch bank-specific phrasings these miss.
+ */
+export const DEFAULT_TRANSFER_PATTERNS: readonly string[] = [
+  "internet transfer",
+  "online transfer",
+  "mobile transfer",
+  "wire transfer",
+  "ach transfer",
+  "bank transfer",
+  "online banking transfer",
+  "transfer from account",
+  "transfer to account",
+  "transfer from checking",
+  "transfer from savings",
+  "transfer to checking",
+  "transfer to savings",
+  "payment to crd",
+];
+
 function detectType(
   row: Record<string, string>,
   description: string,
   isExpense: boolean,
   detection: TypeDetection,
 ): "expense" | "income" | "transfer" {
-  // Check transfer patterns first — cross-cutting concern for all methods
-  if (detection.transferPatterns && detection.transferPatterns.length > 0) {
-    const descLower = description.toLowerCase();
-    for (const pattern of detection.transferPatterns) {
-      if (descLower.includes(pattern.toLowerCase())) {
-        return "transfer";
-      }
+  // Check transfer patterns first — cross-cutting concern for all methods.
+  // Built-in defaults always run so unambiguous transfers don't depend on the
+  // model having supplied a matching pattern; the model's patterns are additive.
+  const descLower = description.toLowerCase();
+  const patterns = [...DEFAULT_TRANSFER_PATTERNS, ...(detection.transferPatterns ?? [])];
+  for (const pattern of patterns) {
+    if (descLower.includes(pattern.toLowerCase())) {
+      return "transfer";
     }
   }
 
@@ -412,8 +435,9 @@ function shouldSkipRow(
 
 const IMPORT_COLUMNS = [
   "id", "date", "description", "amount", "type",
-  "sourceAccount", "sourceCategory", "memo",
+  "sourceAccount", "sourceCategory",
   "merchant", "accountId", "targetAccountId", "categoryId", "categoryConfidence",
+  "duplicate", "duplicateConfidence",
 ] as const;
 
 /** Serialize ImportTransaction[] to a CSV string. */

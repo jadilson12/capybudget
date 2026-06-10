@@ -19,7 +19,7 @@
 import type { IntelligenceConfig } from "./config"
 import type { CapySession } from "./session"
 import type { StreamEvent } from "./types"
-import type { ToolMode } from "./tools"
+import { canImport, canReadPdf } from "./import/session-factory"
 import type { BudgetRepository, FileAdapter } from "@capybudget/persistence"
 
 export interface ClaudeCliAdapterOptions {
@@ -44,13 +44,26 @@ export interface ClaudeCliAdapterOptions {
 export interface ApiAdapterOptions {
   budgetPath: string
   systemPrompt: string
-  /** Gates the in-process tool surface to this mode's tools. */
-  mode: ToolMode
   apiKey: string
   model: string
   onEvent: (event: StreamEvent) => void
   repo: BudgetRepository
   fileAdapter: FileAdapter
+  /**
+   * Whether the active provider can run the import pipeline — passed to
+   * `start_import` so it gates cleanly. Always true for the API adapters that
+   * support structured import; the field exists so the dispatch context carries
+   * the same `canImport` truth the Import tab uses.
+   */
+  importSupported?: boolean
+  /**
+   * Whether the active provider can read PDF attachments — passed to
+   * `start_import` so a PDF shared in chat is gated the same way the Import tab
+   * gates a PDF drop. False for OpenAI, whose adapter swaps a PDF for a
+   * placeholder note (the model would be blind to the document). Mirrors
+   * `canReadPdf`.
+   */
+  pdfSupported?: boolean
 }
 
 /**
@@ -65,12 +78,6 @@ export interface SessionOptions {
   budgetPath: string
   mcpServerPath: string
   systemPrompt: string
-  /**
-   * Gates the in-process tool surface for the API adapters. The Claude
-   * CLI adapter ignores it — it routes tools through the full-surface
-   * MCP server, which external agents share.
-   */
-  mode: ToolMode
   onEvent: (event: StreamEvent) => void
   onExit?: () => void
   repo?: BudgetRepository
@@ -120,12 +127,13 @@ export function createIntelligenceSession(
       return ctor({
         budgetPath: options.budgetPath,
         systemPrompt: options.systemPrompt,
-        mode: options.mode,
         apiKey,
         model,
         onEvent: options.onEvent,
         repo: options.repo,
         fileAdapter: options.fileAdapter,
+        importSupported: canImport(provider),
+        pdfSupported: canReadPdf(provider),
       })
     }
     case "openai": {
@@ -137,12 +145,13 @@ export function createIntelligenceSession(
       return ctor({
         budgetPath: options.budgetPath,
         systemPrompt: options.systemPrompt,
-        mode: options.mode,
         apiKey,
         model,
         onEvent: options.onEvent,
         repo: options.repo,
         fileAdapter: options.fileAdapter,
+        importSupported: canImport(provider),
+        pdfSupported: canReadPdf(provider),
       })
     }
   }

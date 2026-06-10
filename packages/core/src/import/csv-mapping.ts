@@ -96,11 +96,20 @@ export type ColumnRef = SingleColumnRef | MultiColumnRef;
 // ── Top-level mapping ───────────────────────────────────────────
 
 export interface CsvMapping {
-  /** Date column and its format string (e.g. "MM/DD/YYYY", "YYYY-MM-DD", "DD.MM.YYYY"). */
-  date: {
-    column: string;
-    format: string;
-  };
+  /**
+   * 0-based index — into the blank-line-stripped parsed row grid — of the row
+   * the table's headers were read from. Rows above it (bank summary preambles)
+   * are not part of the table. Detected by code; the model may override the
+   * pick when code chose wrong.
+   */
+  headerRow?: number;
+
+  /**
+   * Where each row's date comes from: a column parsed with a format string
+   * (e.g. "MM/DD/YYYY", "YYYY-MM-DD", "DD.MM.YYYY"), or a literal `YYYY-MM-DD`
+   * date applied to every row when the source has no usable date column.
+   */
+  date: { column: string; format: string } | { literal: string };
 
   /** Which column(s) form the transaction description. */
   description: ColumnRef;
@@ -119,9 +128,6 @@ export interface CsvMapping {
 
   /** Source category column, if the source has category data. Null if not available. */
   sourceCategory: ColumnRef | null;
-
-  /** Memo column. Null if not available. */
-  memo: ColumnRef | null;
 
   /** Rows to skip based on column values. */
   skipRules?: SkipRule[];

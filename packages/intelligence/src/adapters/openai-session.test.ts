@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { StreamEvent } from "@capybudget/intelligence"
 import type { BudgetRepository, FileAdapter } from "@capybudget/persistence"
+import { getToolDefinitions } from "../tools"
 
 interface FakeToolCallDelta {
   index: number
@@ -19,13 +20,33 @@ interface FakeTurn {
   tailChunk?: { content: string }
 }
 
-const { mockCreate, queueTurn, lastCreateCall, allCreateCalls, abortSignals } = vi.hoisted(
+const { mockCreate, queueTurn, queueStructured, lastCreateCall, allCreateCalls, abortSignals } = vi.hoisted(
   () => {
     const queue: FakeTurn[] = []
-    const calls: Array<{ messages: unknown; tools: unknown }> = []
+    const calls: Array<{ messages: unknown; tools: unknown; response_format?: unknown }> = []
     const signals: AbortSignal[] = []
 
+    // Non-streaming completions for the structured() path, keyed off the
+    // absence of `stream: true`. Kept separate from the streaming turn queue
+    // so the two request shapes don't share state.
+    const structuredQueue: Array<{ content: string } | { error: Error }> = []
+
     const create = vi.fn().mockImplementation(async (params, opts) => {
+      if (!params.stream) {
+        calls.push({
+          messages: JSON.parse(JSON.stringify(params.messages)),
+          tools: params.tools,
+          response_format: params.response_format,
+        })
+        const next = structuredQueue.shift()
+        if (!next) {
+          throw new Error("Test bug: no structured completion queued")
+        }
+        if ("error" in next) throw next.error
+        return {
+          choices: [{ message: { role: "assistant", content: next.content } }],
+        }
+      }
       calls.push({
         messages: JSON.parse(JSON.stringify(params.messages)),
         tools: params.tools,
@@ -148,9 +169,14 @@ const { mockCreate, queueTurn, lastCreateCall, allCreateCalls, abortSignals } = 
       queue.push(turn)
     }
 
+    function queueStructured(next: { content: string } | { error: Error }) {
+      structuredQueue.push(next)
+    }
+
     return {
       mockCreate: create,
       queueTurn,
+      queueStructured,
       lastCreateCall: () => calls[calls.length - 1],
       allCreateCalls: () => calls,
       abortSignals: signals,
@@ -188,12 +214,11 @@ vi.mock("../tools", async (importOriginal) => {
 
 import { OpenAiSession } from "./openai-session"
 
-function makeSession(mode: "chat" | "import" = "chat") {
+function makeSession() {
   const events: StreamEvent[] = []
   const session = new OpenAiSession({
     budgetPath: "/budget",
     systemPrompt: "you are capy",
-    mode,
     apiKey: "sk-openai-test",
     model: "gpt-4o",
     onEvent: (e) => events.push(e),
@@ -533,14 +558,14 @@ describe("OpenAiSession", () => {
     expect(session.isAlive).toBe(false)
   })
 
-  it("walks an import session through analyze_csv → preview_transform → transform_csv", async () => {
+  it("walks a multi-turn tool loop, threading each result back to the model", async () => {
     queueTurn({
       toolCallDeltas: [
         {
           index: 0,
           id: "call-1",
-          name: "analyze_csv",
-          argFragments: ['{"filename":', '"2024.csv"}'],
+          name: "search_transactions",
+          argFragments: ['{"query":', '"Apple"}'],
         },
       ],
       finish_reason: "tool_calls",
@@ -550,52 +575,34 @@ describe("OpenAiSession", () => {
         {
           index: 0,
           id: "call-2",
-          name: "preview_transform",
-          argFragments: ['{"filename":"2024.csv",', '"mapping":{}}'],
+          name: "group_transactions",
+          argFragments: ['{"groupBy":["merchant"],', '"metrics":["sum"]}'],
         },
       ],
       finish_reason: "tool_calls",
     })
     queueTurn({
-      toolCallDeltas: [
-        {
-          index: 0,
-          id: "call-3",
-          name: "transform_csv",
-          argFragments: ['{"filename":"2024.csv",', '"mapping":{}}'],
-        },
-      ],
-      finish_reason: "tool_calls",
-    })
-    queueTurn({
-      textDeltas: ["Done — 42 rows imported."],
+      textDeltas: ["You spent $312 across 8 Apple charges."],
       finish_reason: "stop",
     })
 
     mockRunTool
-      .mockResolvedValueOnce(JSON.stringify({ headers: ["Date"], totalRows: 42 }))
-      .mockResolvedValueOnce(JSON.stringify({ transactions: [{ id: "imp-1" }] }))
-      .mockResolvedValueOnce(JSON.stringify({ success: true, stats: { rows: 42 } }))
+      .mockResolvedValueOnce(JSON.stringify({ rows: [{ id: "t-1" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ groups: [{ key: "Apple", sum: -31200 }] }))
 
     const { session, events } = makeSession()
-    await session.send("Process this file.")
+    await session.send("How much have I spent at Apple?")
 
     expect(mockRunTool).toHaveBeenNthCalledWith(
       1,
-      "analyze_csv",
-      { filename: "2024.csv" },
+      "search_transactions",
+      { query: "Apple" },
       expect.objectContaining({ budgetPath: "/budget" }),
     )
     expect(mockRunTool).toHaveBeenNthCalledWith(
       2,
-      "preview_transform",
-      { filename: "2024.csv", mapping: {} },
-      expect.objectContaining({ budgetPath: "/budget" }),
-    )
-    expect(mockRunTool).toHaveBeenNthCalledWith(
-      3,
-      "transform_csv",
-      { filename: "2024.csv", mapping: {} },
+      "group_transactions",
+      { groupBy: ["merchant"], metrics: ["sum"] },
       expect.objectContaining({ budgetPath: "/budget" }),
     )
 
@@ -916,47 +923,141 @@ describe("OpenAiSession", () => {
   })
 })
 
-describe("OpenAiSession tool gating", () => {
-  async function toolNamesFor(mode: "chat" | "import"): Promise<string[]> {
+describe("OpenAiSession tool surface", () => {
+  async function loopToolNames(): Promise<string[]> {
     queueTurn({ textDeltas: ["ok"], finish_reason: "stop" })
-    const { session } = makeSession(mode)
+    const { session } = makeSession()
     await session.send("hi")
     const tools = lastCreateCall().tools as Array<{ function: { name: string } }>
     return tools.map((t) => t.function.name)
   }
 
-  it("chat sends only chat-mode tools — render tools in, import/csv tools out", async () => {
-    const names = await toolNamesFor("chat")
+  it("the agent loop sends the full tool surface, byte-identical to the MCP surface", async () => {
+    const names = await loopToolNames()
+    expect(new Set(names)).toEqual(new Set(getToolDefinitions().map((t) => t.name)))
     expect(names).toContain("render_table")
-    expect(names).toContain("render_chart")
-    expect(names).toContain("render_followups")
-    expect(names).toContain("list_transactions")
-    expect(names).toContain("search_transactions")
-    expect(names).toContain("group_transactions")
     expect(names).toContain("create_transaction")
-    expect(names).not.toContain("analyze_csv")
-    expect(names).not.toContain("transform_csv")
-    expect(names).not.toContain("enrich_update")
-    expect(names).not.toContain("write_import_file")
-    expect(names).toHaveLength(22)
+    expect(names).toContain("start_import")
+  })
+})
+
+describe("OpenAiSession.structured", () => {
+  const SCHEMA = {
+    type: "object" as const,
+    properties: { ok: { type: "boolean" as const } },
+    required: ["ok"],
+  }
+
+  it("makes one constrained, tool-free call and returns the parsed result", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    const result = await session.structured<{ ok: boolean }>(
+      [{ role: "user", content: "extract" }],
+      SCHEMA,
+    )
+
+    expect(result).toEqual({ ok: true })
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+
+    const call = lastCreateCall()
+    expect(call.tools).toBeUndefined()
+    expect(call.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "structured_output", schema: SCHEMA },
+    })
+    const messages = call.messages as Array<{ role: string }>
+    expect(messages[0].role).toBe("system")
   })
 
-  it("import sends only import-mode tools — csv/enrich in, render/CRUD out", async () => {
-    const names = await toolNamesFor("import")
-    expect(names).toContain("analyze_csv")
-    expect(names).toContain("transform_csv")
-    expect(names).toContain("enrich_update")
-    expect(names).toContain("write_import_file")
-    expect(names).not.toContain("render_table")
-    expect(names).not.toContain("render_chart")
-    expect(names).not.toContain("render_followups")
-    expect(names).not.toContain("create_transaction")
-    expect(names).not.toContain("list_transactions")
-    expect(names).toHaveLength(16)
+  it("sends strict on the json_schema wrapper, not inside the schema, for a strict schema", async () => {
+    queueStructured({ content: '{"ok": true}' })
+    const STRICT_SCHEMA = {
+      type: "object" as const,
+      additionalProperties: false,
+      strict: true,
+      properties: { ok: { type: "boolean" as const } },
+      required: ["ok"],
+    }
+
+    const { session } = makeSession()
+    await session.structured([{ role: "user", content: "x" }], STRICT_SCHEMA)
+
+    const rf = lastCreateCall().response_format as {
+      json_schema: { strict?: boolean; schema: Record<string, unknown> }
+    }
+    expect(rf.json_schema.strict).toBe(true)
+    // The marker is stripped from the schema OpenAI validates against.
+    expect(rf.json_schema.schema).not.toHaveProperty("strict")
+    expect(rf.json_schema.schema).toMatchObject({ additionalProperties: false })
   })
 
-  it("keeps search_transactions in both modes (both prompts advertise it)", async () => {
-    expect(await toolNamesFor("chat")).toContain("search_transactions")
-    expect(await toolNamesFor("import")).toContain("search_transactions")
+  it("omits strict from the wrapper for a non-strict schema", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    await session.structured([{ role: "user", content: "x" }], SCHEMA)
+
+    const rf = lastCreateCall().response_format as { json_schema: Record<string, unknown> }
+    expect(rf.json_schema).not.toHaveProperty("strict")
+  })
+
+  it("forwards image content as image_url and degrades PDFs to a text note", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    await session.structured(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "read this receipt" },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "AAAA" },
+            },
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: "BBBB" },
+            },
+          ],
+        },
+      ],
+      SCHEMA,
+    )
+
+    const call = lastCreateCall()
+    const messages = call.messages as Array<{ role: string; content: unknown }>
+    const userBlocks = messages[1].content as Array<{ type: string; text?: string }>
+    expect(userBlocks.map((b) => b.type)).toEqual(["text", "image_url", "text"])
+    expect(userBlocks[2].text).toContain("PDF")
+  })
+
+  it("rejects when the model returns output that violates the schema", async () => {
+    queueStructured({ content: '{"ok": "not a boolean"}' })
+
+    const { session } = makeSession()
+    await expect(
+      session.structured([{ role: "user", content: "x" }], SCHEMA),
+    ).rejects.toThrowError(/boolean/i)
+  })
+
+  it("passes an assistant turn through as plain text content (after the system message)", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    await session.structured(
+      [
+        { role: "user", content: "extract" },
+        { role: "assistant", content: '{"ok": false}' },
+        { role: "user", content: "redo it" },
+      ],
+      SCHEMA,
+    )
+
+    const call = lastCreateCall()
+    const messages = call.messages as Array<{ role: string; content: unknown }>
+    expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"])
+    expect(messages[2].content).toBe('{"ok": false}')
   })
 })

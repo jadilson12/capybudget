@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CategorySelector } from "@/components/budget/category-selector";
 import { AccountSelector } from "@/components/budget/account-selector";
-import type { ImportTransaction, DuplicateMatch } from "@capybudget/core";
+import type { ImportTransaction } from "@capybudget/core";
 import type { Category, Account } from "@capybudget/core";
 import { formatMoney, formatDateLabel } from "@capybudget/core";
 import {
@@ -48,7 +48,7 @@ interface ImportTableProps {
   categories: Category[];
   accounts: Account[];
   accountMapping: Record<string, string>;
-  duplicates: Map<string, DuplicateMatch>;
+  duplicateIds: Set<string>;
 }
 
 function defaultDirection(column: ImportSortColumn): "asc" | "desc" {
@@ -128,7 +128,7 @@ export function ImportTable({
   categories,
   accounts,
   accountMapping,
-  duplicates,
+  duplicateIds,
 }: ImportTableProps) {
   const [editingCell, setEditingCell] = useState<{
     rowId: string;
@@ -210,12 +210,15 @@ export function ImportTable({
       <TableBody>
         {transactions.map((txn, i) => {
           const isSelected = selectedIds.has(txn.id);
-          const dup = duplicates.get(txn.id);
+          const isDuplicate = duplicateIds.has(txn.id);
+          // Low confidence = matched only through the relaxed ±day window — a
+          // possible duplicate the user should review, not a settled one.
+          const isPossibleDuplicate = isDuplicate && txn.duplicateConfidence === "low";
           const activeCol =
             editingCell?.rowId === txn.id ? editingCell.column : null;
 
-          const rowBg = dup && !isSelected
-            ? "bg-blue-500/5 opacity-60"
+          const rowBg = isDuplicate && !isSelected
+            ? `${isPossibleDuplicate ? "bg-amber-500/5" : "bg-blue-500/5"} opacity-60`
             : isSelected
               ? i % 2 === 0
                 ? "bg-transparent"
@@ -241,10 +244,16 @@ export function ImportTable({
                     onCheckedChange={() => onToggleSelect(txn.id, false)}
                     aria-label="Include transaction"
                   />
-                  {dup && (
-                    <span title={`Possible duplicate (${dup.confidence} confidence)`}>
+                  {isDuplicate && (
+                    <span
+                      title={
+                        isPossibleDuplicate
+                          ? "Possible duplicate (close date match)"
+                          : "Duplicate of an existing transaction"
+                      }
+                    >
                       <Copy
-                        className={`h-3 w-3 shrink-0 ${dup.confidence === "high" ? "text-blue-500" : "text-blue-400/60"}`}
+                        className={`h-3 w-3 shrink-0 ${isPossibleDuplicate ? "text-amber-500" : "text-blue-500"}`}
                       />
                     </span>
                   )}
@@ -327,7 +336,15 @@ export function ImportTable({
               {/* Account — selector for transfers, display for others */}
               <TableCell className="text-[13px] text-muted-foreground py-1" onClick={(e) => e.stopPropagation()}>
                 {txn.type === "transfer" ? (
-                  <div className="[&>div]:w-full [&_button:first-of-type]:w-full [&_button:first-of-type]:min-w-0">
+                  <div
+                    className={`[&>div]:w-full [&_button:first-of-type]:w-full [&_button:first-of-type]:min-w-0 ${
+                      // Unset counterpart → outline the dropdown so it's easy to
+                      // spot in the preview that it still needs an account.
+                      txn.targetAccountId
+                        ? ""
+                        : "[&_button:first-of-type]:border-amber-500/60 [&_button:first-of-type]:ring-1 [&_button:first-of-type]:ring-amber-500/40"
+                    }`}
+                  >
                     <AccountSelector
                       accounts={accounts}
                       value={txn.targetAccountId || ""}

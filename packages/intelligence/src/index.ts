@@ -27,6 +27,14 @@ export { extractErrorMessage } from "./error-message"
 // Session interface
 export type { CapySessionOptions, CapySession } from "./session"
 
+// Structured-output primitive (stateless, schema-validated single call)
+export { parseStructured, SchemaValidationError } from "./structured"
+export type {
+  JsonSchema,
+  StructuredMessage,
+  StructuredSession,
+} from "./structured"
+
 // Provider config
 export {
   DEFAULT_INTELLIGENCE_CONFIG,
@@ -47,12 +55,10 @@ export type {
   ApiAdapterOptions,
 } from "./factory"
 
-// Prompts (chat / import / enrich) + shared budget snapshot
+// Chat prompt + shared budget snapshot
 export {
   SYSTEM_PROMPT,
   buildContext,
-  IMPORT_SYSTEM_PROMPT,
-  ENRICH_SYSTEM_PROMPT,
   APP_KNOWLEDGE,
   buildBudgetSnapshot,
   formatBudgetSnapshot,
@@ -77,11 +83,11 @@ export {
   DATA_TOOL_DEFS,
   MUTATION_TOOL_DEFS,
   IMPORT_TOOL_DEFS,
-  CSV_TOOL_DEFS,
   READ_FILE_TOOL_DEF,
   READ_SPEC_TOOL_DEF,
   RENDER_TOOL_DEFS,
   MUTATION_TOOL_NAMES,
+  START_IMPORT_TOOL_NAME,
   getToolDefinitions,
   // Dispatch
   runTool,
@@ -100,19 +106,58 @@ export {
   handleCreateCategory,
   handleUpdateCategory,
   handleDeleteCategory,
-  handleReadImportFile,
-  handleWriteImportFile,
-  handleAppendImportFile,
-  handleListImportFiles,
-  handleAnalyzeCsv,
-  handlePreviewTransform,
-  handleTransformCsv,
-  handleAutoEnrich,
-  handleEnrichStats,
-  handleEnrichSample,
-  handleEnrichUpdate,
   handleReadFile,
   handleReadSpec,
 } from "./tools"
-export type { ToolDefinition, ToolMode, ToolContext } from "./tools"
+export type { ToolDefinition, ToolContext } from "./tools"
+
+// Import orchestrator — state machine, event stream, injected seams, schemas
+export {
+  ImportOrchestrator,
+  PIPELINE_PHASES,
+  FileStagingStore,
+  parseImportCsv,
+  normalizeCsv,
+  normalizeImage,
+  isImageOrPdf,
+  enrichBatch,
+  enrichTransfers,
+  batchRows,
+  needsEnrich,
+  needsTransferEnrich,
+  ENRICH_BATCH_SIZE,
+  ENRICH_CONCURRENCY,
+  CSV_MAPPING_SCHEMA,
+  EXTRACTION_SCHEMA,
+  ENRICH_BATCH_SCHEMA,
+  ENRICH_TRANSFER_SCHEMA,
+  createStructuredImportSession,
+  canImport,
+  canReadPdf,
+  IMPORT_STRUCTURED_SYSTEM_PROMPT,
+} from "./import"
+export type {
+  OrchestratorDeps,
+  ImportEvent,
+  ImportEventHandler,
+  ImportPhase,
+  TerminalLogEntry,
+  ImportErrorReason,
+  LogLevel,
+  BatchProgress,
+  GroundingEventStats,
+  StagingStore,
+  SourceFile,
+  ImportState,
+  BudgetDataProvider,
+  NormalizeCsvResult,
+  NormalizeImageResult,
+  CsvMappingResult,
+  ExtractionResult,
+  EnrichBatchResult,
+  EnrichedRow,
+  TransferEnrichResult,
+  TransferEnriched,
+  StructuredImportSessionDeps,
+} from "./import"
 

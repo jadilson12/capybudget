@@ -2,20 +2,19 @@ import Anthropic from "@anthropic-ai/sdk"
 import { buildRenderToolMap, RENDER_FOLLOWUPS_TOOL_NAME } from "../render-map"
 import { extractErrorMessage } from "../error-message"
 import { runTool, getToolDefinitions, SESSION_TOOL_CALL_BUDGET } from "../tools"
-import type { ToolMode } from "../tools"
 import type { ApiAdapterOptions } from "../factory"
 import type { CapySession } from "../session"
-import type { ContentBlock, MessageContent } from "../types"
+import type { ContentBlock, FileAttachment, MessageContent } from "../types"
+import { parseStructured, schemaBody } from "../structured"
+import type { JsonSchema, StructuredMessage, StructuredSession } from "../structured"
 
 const MAX_TOKENS = 8192
 
-function getAnthropicTools(mode: ToolMode): Anthropic.Tool[] {
-  return getToolDefinitions(mode).map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-  }))
-}
+const ANTHROPIC_TOOLS: Anthropic.Tool[] = getToolDefinitions().map((t) => ({
+  name: t.name,
+  description: t.description,
+  input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+}))
 
 const RENDER_TOOL_MAP = buildRenderToolMap()
 
@@ -65,7 +64,7 @@ function toAnthropicUserContent(
   })
 }
 
-export class AnthropicSession implements CapySession {
+export class AnthropicSession implements CapySession, StructuredSession {
   private readonly client: Anthropic
   private readonly opts: ApiAdapterOptions
   private readonly messages: Anthropic.MessageParam[] = []
@@ -74,6 +73,10 @@ export class AnthropicSession implements CapySession {
   private killed = false
   private interrupted = false
   private toolCallCount = 0
+  /** Attachments on the current turn — staged by `start_import`, then cleared.
+   *  Held outside `messages` because the flattened message content can't be
+   *  turned back into files. */
+  private turnAttachments: readonly FileAttachment[] = []
 
   constructor(opts: ApiAdapterOptions) {
     this.opts = opts
@@ -88,10 +91,11 @@ export class AnthropicSession implements CapySession {
     return this.alive
   }
 
-  async send(content: MessageContent): Promise<void> {
+  async send(content: MessageContent, attachments: readonly FileAttachment[] = []): Promise<void> {
     if (this.killed) return
 
     this.interrupted = false
+    this.turnAttachments = attachments
     this.appendUserContent(toAnthropicUserContent(content))
     this.alive = true
 
@@ -105,6 +109,7 @@ export class AnthropicSession implements CapySession {
       const { message, status } = extractErrorMessage(err)
       this.opts.onEvent({ type: "error", message, status, provider: "anthropic" })
     } finally {
+      this.turnAttachments = []
       this.abortController = null
     }
   }
@@ -131,8 +136,35 @@ export class AnthropicSession implements CapySession {
     this.alive = false
   }
 
+  async structured<T = unknown>(
+    messages: readonly StructuredMessage[],
+    schema: JsonSchema,
+  ): Promise<T> {
+    const message = await this.client.messages.create({
+      model: this.opts.model,
+      system: this.opts.systemPrompt,
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: toAnthropicUserContent(m.content),
+      })),
+      max_tokens: MAX_TOKENS,
+      // `output_config.format` enforces the schema unconditionally, so the
+      // OpenAI-only `strict` marker is dropped from the schema Anthropic sees.
+      output_config: {
+        format: { type: "json_schema", schema: schemaBody(schema) },
+      },
+    })
+
+    const text = message.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("")
+
+    return parseStructured<T>(text, schema)
+  }
+
   private async runAgenticLoop(): Promise<void> {
-    const tools = getAnthropicTools(this.opts.mode)
+    const tools = ANTHROPIC_TOOLS
 
     const completedBlocks: ContentBlock[] = []
     const emitContent = () => {
@@ -243,6 +275,9 @@ export class AnthropicSession implements CapySession {
               repo: this.opts.repo,
               fileAdapter: this.opts.fileAdapter,
               budgetPath: this.opts.budgetPath,
+              attachments: [...this.turnAttachments],
+              importSupported: this.opts.importSupported,
+              pdfSupported: this.opts.pdfSupported,
             },
           )
         } catch (err) {

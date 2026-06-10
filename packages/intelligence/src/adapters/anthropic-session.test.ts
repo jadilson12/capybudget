@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { StreamEvent } from "@capybudget/intelligence"
 import type { BudgetRepository, FileAdapter } from "@capybudget/persistence"
+import { getToolDefinitions } from "../tools"
 
 interface FakeBlock {
   type: "text" | "tool_use"
@@ -150,10 +151,30 @@ const { mockStream, queueTurn, lastStreamCall, abortSignals, streamStubs } = vi.
   }
 })
 
+const { mockCreate, queueStructured, lastCreateCall } = vi.hoisted(() => {
+  const calls: Array<Record<string, unknown>> = []
+  const responses: Array<{ content: string } | { error: Error }> = []
+  const create = vi.fn().mockImplementation((params: Record<string, unknown>) => {
+    calls.push(params)
+    const next = responses.shift() ?? { content: "{}" }
+    if ("error" in next) return Promise.reject(next.error)
+    return Promise.resolve({
+      content: [{ type: "text", text: next.content }],
+      stop_reason: "end_turn",
+    })
+  })
+  return {
+    mockCreate: create,
+    queueStructured: (next: { content: string } | { error: Error }) =>
+      responses.push(next),
+    lastCreateCall: () => calls[calls.length - 1],
+  }
+})
+
 vi.mock("@anthropic-ai/sdk", () => {
   return {
     default: class {
-      messages = { stream: mockStream }
+      messages = { stream: mockStream, create: mockCreate }
     },
   }
 })
@@ -178,12 +199,11 @@ vi.mock("../tools", async (importOriginal) => {
 
 import { AnthropicSession } from "./anthropic-session"
 
-function makeSession(mode: "chat" | "import" = "chat") {
+function makeSession() {
   const events: StreamEvent[] = []
   const session = new AnthropicSession({
     budgetPath: "/budget",
     systemPrompt: "you are capy",
-    mode,
     apiKey: "sk-ant-test",
     model: "claude-sonnet-4-6",
     onEvent: (e) => events.push(e),
@@ -195,6 +215,7 @@ function makeSession(mode: "chat" | "import" = "chat") {
 
 beforeEach(() => {
   mockStream.mockClear()
+  mockCreate.mockClear()
   mockRunTool.mockReset()
   abortSignals.length = 0
   streamStubs.length = 0
@@ -419,62 +440,45 @@ describe("AnthropicSession", () => {
     expect(session.isAlive).toBe(false)
   })
 
-  it("walks an import session through analyze_csv → preview_transform → transform_csv", async () => {
+  it("walks a multi-turn tool loop, threading each result back to the model", async () => {
     queueTurn({
       toolUses: [
-        { id: "tu-analyze", name: "analyze_csv", input: { filename: "2024.csv" } },
+        { id: "tu-search", name: "search_transactions", input: { query: "Apple" } },
       ],
       stop_reason: "tool_use",
     })
     queueTurn({
       toolUses: [
         {
-          id: "tu-preview",
-          name: "preview_transform",
-          input: { filename: "2024.csv", mapping: { kind: "stub" } },
+          id: "tu-group",
+          name: "group_transactions",
+          input: { groupBy: ["merchant"], metrics: ["sum"] },
         },
       ],
       stop_reason: "tool_use",
     })
     queueTurn({
-      toolUses: [
-        {
-          id: "tu-transform",
-          name: "transform_csv",
-          input: { filename: "2024.csv", mapping: { kind: "stub" } },
-        },
-      ],
-      stop_reason: "tool_use",
-    })
-    queueTurn({
-      textDeltas: ["Done — 42 rows imported."],
+      textDeltas: ["You spent $312 across 8 Apple charges."],
       stop_reason: "end_turn",
     })
 
     mockRunTool
-      .mockResolvedValueOnce(JSON.stringify({ headers: ["Date"], totalRows: 42 }))
-      .mockResolvedValueOnce(JSON.stringify({ transactions: [{ id: "imp-1" }] }))
-      .mockResolvedValueOnce(JSON.stringify({ success: true, stats: { rows: 42 } }))
+      .mockResolvedValueOnce(JSON.stringify({ rows: [{ id: "t-1" }] }))
+      .mockResolvedValueOnce(JSON.stringify({ groups: [{ key: "Apple", sum: -31200 }] }))
 
     const { session, events } = makeSession()
-    await session.send("Process this file.")
+    await session.send("How much have I spent at Apple?")
 
     expect(mockRunTool).toHaveBeenNthCalledWith(
       1,
-      "analyze_csv",
-      { filename: "2024.csv" },
+      "search_transactions",
+      { query: "Apple" },
       expect.objectContaining({ budgetPath: "/budget" }),
     )
     expect(mockRunTool).toHaveBeenNthCalledWith(
       2,
-      "preview_transform",
-      expect.objectContaining({ filename: "2024.csv" }),
-      expect.objectContaining({ budgetPath: "/budget" }),
-    )
-    expect(mockRunTool).toHaveBeenNthCalledWith(
-      3,
-      "transform_csv",
-      expect.objectContaining({ filename: "2024.csv" }),
+      "group_transactions",
+      expect.objectContaining({ groupBy: ["merchant"] }),
       expect.objectContaining({ budgetPath: "/budget" }),
     )
 
@@ -817,47 +821,127 @@ describe("AnthropicSession", () => {
   })
 })
 
-describe("AnthropicSession tool gating", () => {
-  async function toolNamesFor(mode: "chat" | "import"): Promise<string[]> {
-    const { session } = makeSession(mode)
+describe("AnthropicSession tool surface", () => {
+  async function loopToolNames(): Promise<string[]> {
+    const { session } = makeSession()
     queueTurn({ textDeltas: ["ok"], stop_reason: "end_turn" })
     await session.send("hi")
     const tools = lastStreamCall().tools as Array<{ name: string }>
     return tools.map((t) => t.name)
   }
 
-  it("chat sends only chat-mode tools — render tools in, import/csv tools out", async () => {
-    const names = await toolNamesFor("chat")
+  it("the agent loop sends the full tool surface, byte-identical to the MCP surface", async () => {
+    const names = await loopToolNames()
+    expect(new Set(names)).toEqual(new Set(getToolDefinitions().map((t) => t.name)))
     expect(names).toContain("render_table")
-    expect(names).toContain("render_chart")
-    expect(names).toContain("render_followups")
-    expect(names).toContain("list_transactions")
-    expect(names).toContain("search_transactions")
-    expect(names).toContain("group_transactions")
     expect(names).toContain("create_transaction")
-    expect(names).not.toContain("analyze_csv")
-    expect(names).not.toContain("transform_csv")
-    expect(names).not.toContain("enrich_update")
-    expect(names).not.toContain("write_import_file")
-    expect(names).toHaveLength(22)
+    expect(names).toContain("start_import")
+  })
+})
+
+describe("AnthropicSession.structured", () => {
+  const SCHEMA = {
+    type: "object" as const,
+    properties: { ok: { type: "boolean" as const } },
+    required: ["ok"],
+  }
+
+  it("makes one constrained, tool-free call and returns the parsed result", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    const result = await session.structured<{ ok: boolean }>(
+      [{ role: "user", content: "extract" }],
+      SCHEMA,
+    )
+
+    expect(result).toEqual({ ok: true })
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+    expect(mockStream).not.toHaveBeenCalled()
+
+    const call = lastCreateCall()
+    expect(call.tools).toBeUndefined()
+    expect(call.output_config).toEqual({
+      format: { type: "json_schema", schema: SCHEMA },
+    })
+    expect(call.model).toBe("claude-sonnet-4-6")
   })
 
-  it("import sends only import-mode tools — csv/enrich in, render/CRUD out", async () => {
-    const names = await toolNamesFor("import")
-    expect(names).toContain("analyze_csv")
-    expect(names).toContain("transform_csv")
-    expect(names).toContain("enrich_update")
-    expect(names).toContain("write_import_file")
-    expect(names).not.toContain("render_table")
-    expect(names).not.toContain("render_chart")
-    expect(names).not.toContain("render_followups")
-    expect(names).not.toContain("create_transaction")
-    expect(names).not.toContain("list_transactions")
-    expect(names).toHaveLength(16)
+  it("drops the OpenAI-only strict marker from the schema it sends", async () => {
+    queueStructured({ content: '{"ok": true}' })
+    const STRICT_SCHEMA = {
+      type: "object" as const,
+      additionalProperties: false,
+      strict: true,
+      properties: { ok: { type: "boolean" as const } },
+      required: ["ok"],
+    }
+
+    const { session } = makeSession()
+    await session.structured([{ role: "user", content: "x" }], STRICT_SCHEMA)
+
+    const oc = lastCreateCall().output_config as { format: { schema: Record<string, unknown> } }
+    // output_config.format enforces the schema unconditionally — `strict` is ours.
+    expect(oc.format.schema).not.toHaveProperty("strict")
+    expect(oc.format.schema).toMatchObject({ additionalProperties: false })
   })
 
-  it("keeps search_transactions in both modes (both prompts advertise it)", async () => {
-    expect(await toolNamesFor("chat")).toContain("search_transactions")
-    expect(await toolNamesFor("import")).toContain("search_transactions")
+  it("forwards multimodal content (text + image + document) to the SDK", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    await session.structured(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "read this receipt" },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "AAAA" },
+            },
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: "BBBB" },
+            },
+          ],
+        },
+      ],
+      SCHEMA,
+    )
+
+    const call = lastCreateCall()
+    const messages = call.messages as Array<{ role: string; content: unknown }>
+    expect(messages).toHaveLength(1)
+    const blocks = messages[0].content as Array<{ type: string }>
+    expect(blocks.map((b) => b.type)).toEqual(["text", "image", "document"])
+  })
+
+  it("rejects when the model returns output that violates the schema", async () => {
+    queueStructured({ content: '{"ok": "not a boolean"}' })
+
+    const { session } = makeSession()
+    await expect(
+      session.structured([{ role: "user", content: "x" }], SCHEMA),
+    ).rejects.toThrowError(/boolean/i)
+  })
+
+  it("passes an assistant turn through as plain text content", async () => {
+    queueStructured({ content: '{"ok": true}' })
+
+    const { session } = makeSession()
+    await session.structured(
+      [
+        { role: "user", content: "extract" },
+        { role: "assistant", content: '{"ok": false}' },
+        { role: "user", content: "redo it" },
+      ],
+      SCHEMA,
+    )
+
+    const call = lastCreateCall()
+    const messages = call.messages as Array<{ role: string; content: unknown }>
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "user"])
+    expect(messages[1].content).toBe('{"ok": false}')
   })
 })

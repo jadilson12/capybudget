@@ -1,0 +1,129 @@
+/**
+ * Headless test doubles for the import orchestrator — an in-memory staging
+ * store, a fixed budget-data provider, and a scriptable structured session.
+ * Export-only (not a `.test.ts`) so every import test shares one set, per
+ * STRUCTURE.md's test-factory rule.
+ */
+
+import type { Account, Category, ImportTransaction, RowContext, TransferContext, Transaction } from "@capybudget/core";
+import { parseStructured } from "../structured";
+import type { JsonSchema, StructuredMessage, StructuredSession } from "../structured";
+import type { BudgetDataProvider } from "./budget-data";
+import type { ImportState, SourceFile, StagingStore } from "./staging-store";
+
+/** An in-memory {@link StagingStore} — the resume substrate without a disk. */
+export class MemoryStagingStore implements StagingStore {
+  sources: SourceFile[] = [];
+  transactions: ImportTransaction[] | null = null;
+  context: Record<string, RowContext> | null = null;
+  transferContext: Record<string, TransferContext> | null = null;
+  state: ImportState | null = null;
+  /** How many times transactions were written — asserts per-batch persistence. */
+  writeCount = 0;
+
+  constructor(init: Partial<Pick<MemoryStagingStore, "sources" | "transactions" | "context" | "transferContext" | "state">> = {}) {
+    if (init.sources) this.sources = init.sources;
+    if (init.transactions) this.transactions = init.transactions;
+    if (init.context) this.context = init.context;
+    if (init.transferContext) this.transferContext = init.transferContext;
+    if (init.state) this.state = init.state;
+  }
+
+  async listSources(): Promise<SourceFile[]> {
+    return this.sources;
+  }
+  async writeSource(name: string, content: string): Promise<void> {
+    const mediaType = /\.(png|jpe?g|webp|gif)$/i.test(name)
+      ? `image/${name.slice(name.lastIndexOf(".") + 1).toLowerCase()}`
+      : name.toLowerCase().endsWith(".pdf")
+        ? "application/pdf"
+        : "text/csv";
+    const file: SourceFile = { name, content, mediaType };
+    const existing = this.sources.findIndex((s) => s.name === name);
+    if (existing >= 0) this.sources[existing] = file;
+    else this.sources.push(file);
+  }
+  async readTransactions(): Promise<ImportTransaction[] | null> {
+    return this.transactions ? this.transactions.map((r) => ({ ...r })) : null;
+  }
+  async writeTransactions(rows: ImportTransaction[]): Promise<void> {
+    this.transactions = rows.map((r) => ({ ...r }));
+    this.writeCount++;
+  }
+  async readContext(): Promise<Record<string, RowContext> | null> {
+    return this.context;
+  }
+  async writeContext(context: Record<string, RowContext>): Promise<void> {
+    this.context = context;
+  }
+  async readTransferContext(): Promise<Record<string, TransferContext> | null> {
+    return this.transferContext;
+  }
+  async writeTransferContext(context: Record<string, TransferContext>): Promise<void> {
+    this.transferContext = context;
+  }
+  async readState(): Promise<ImportState | null> {
+    return this.state;
+  }
+  async writeState(state: ImportState): Promise<void> {
+    this.state = state;
+  }
+  async clear(): Promise<void> {
+    this.transactions = null;
+    this.context = null;
+    this.transferContext = null;
+    this.state = null;
+    this.sources = [];
+  }
+}
+
+/** A fixed-snapshot {@link BudgetDataProvider}. */
+export class MemoryBudgetData implements BudgetDataProvider {
+  constructor(
+    private readonly history: Transaction[] = [],
+    private readonly categories: Category[] = [],
+    private readonly accounts: Account[] = [],
+  ) {}
+  async getHistory(): Promise<Transaction[]> {
+    return this.history;
+  }
+  async getCategories(): Promise<Category[]> {
+    return this.categories;
+  }
+  async getAccounts(): Promise<Account[]> {
+    return this.accounts;
+  }
+}
+
+/**
+ * A scriptable {@link StructuredSession}. Each call pops the next responder,
+ * which returns a value (sync or via a promise) or throws / returns an `Error`
+ * (to exercise batch-failure isolation). An async responder lets a test gate a
+ * batch's completion to drive in-flight ordering (the cancel race). Records
+ * every call for assertions; runs out → throws so an over-call is loud.
+ *
+ * The responder's value is run through `parseStructured` against the call's
+ * schema, exactly as the real session validates a provider response — so an
+ * off-schema value (e.g. a mapping missing `date.format`) throws
+ * `SchemaValidationError` here too, letting tests exercise that path.
+ */
+export class MockStructuredSession implements StructuredSession {
+  readonly calls: { messages: readonly StructuredMessage[]; schema: JsonSchema }[] = [];
+  private readonly responders: ((messages: readonly StructuredMessage[]) => unknown)[];
+
+  constructor(responders: ((messages: readonly StructuredMessage[]) => unknown)[]) {
+    this.responders = responders;
+  }
+
+  async structured<T = unknown>(
+    messages: readonly StructuredMessage[],
+    schema: JsonSchema,
+  ): Promise<T> {
+    this.calls.push({ messages, schema });
+    const responder = this.responders.shift();
+    if (!responder) throw new Error("MockStructuredSession: no responder left for call");
+    const value = await responder(messages);
+    if (value instanceof Error) throw value;
+    return parseStructured<T>(JSON.stringify(value), schema);
+  }
+}

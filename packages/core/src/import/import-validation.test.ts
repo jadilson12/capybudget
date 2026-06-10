@@ -11,12 +11,13 @@ function makeRow(overrides: Partial<ImportTransaction> = {}): ImportTransaction 
     type: "expense",
     sourceAccount: "Checking",
     sourceCategory: "",
-    memo: "",
     merchant: "Starbucks",
     accountId: "",
     targetAccountId: "",
     categoryId: "",
     categoryConfidence: "",
+    duplicate: false,
+    duplicateConfidence: "",
     ...overrides,
   };
 }

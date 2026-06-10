@@ -2,23 +2,24 @@ import OpenAI from "openai"
 import { buildRenderToolMap, RENDER_FOLLOWUPS_TOOL_NAME } from "../render-map"
 import { extractErrorMessage } from "../error-message"
 import { runTool, getToolDefinitions, SESSION_TOOL_CALL_BUDGET } from "../tools"
-import type { ToolMode } from "../tools"
 import type { ApiAdapterOptions } from "../factory"
 import type { CapySession } from "../session"
-import type { ContentBlock, MessageContent } from "../types"
+import type { ContentBlock, FileAttachment, MessageContent } from "../types"
+import { parseStructured, schemaBody } from "../structured"
+import type { JsonSchema, StructuredMessage, StructuredSession } from "../structured"
 
 const MAX_TOKENS = 8192
 
-function getOpenAiTools(mode: ToolMode): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return getToolDefinitions(mode).map((t) => ({
+const OPENAI_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = getToolDefinitions().map(
+  (t) => ({
     type: "function",
     function: {
       name: t.name,
       description: t.description,
       parameters: t.inputSchema as Record<string, unknown>,
     },
-  }))
-}
+  }),
+)
 
 const RENDER_TOOL_MAP = buildRenderToolMap()
 
@@ -72,7 +73,7 @@ function finalizeToolArgs(acc: ToolCallAccumulator): Record<string, unknown> | E
   return result
 }
 
-export class OpenAiSession implements CapySession {
+export class OpenAiSession implements CapySession, StructuredSession {
   private readonly client: OpenAI
   private readonly opts: ApiAdapterOptions
   private readonly messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = []
@@ -81,6 +82,10 @@ export class OpenAiSession implements CapySession {
   private killed = false
   private interrupted = false
   private toolCallCount = 0
+  /** Attachments on the current turn — staged by `start_import`, then cleared.
+   *  Held outside `messages` because the flattened message content can't be
+   *  turned back into files. */
+  private turnAttachments: readonly FileAttachment[] = []
 
   constructor(opts: ApiAdapterOptions) {
     this.opts = opts
@@ -95,10 +100,11 @@ export class OpenAiSession implements CapySession {
     return this.alive
   }
 
-  async send(content: MessageContent): Promise<void> {
+  async send(content: MessageContent, attachments: readonly FileAttachment[] = []): Promise<void> {
     if (this.killed) return
 
     this.interrupted = false
+    this.turnAttachments = attachments
     this.messages.push({
       role: "user",
       content: toOpenAiUserContent(content),
@@ -115,6 +121,7 @@ export class OpenAiSession implements CapySession {
       const { message, status } = extractErrorMessage(err)
       this.opts.onEvent({ type: "error", message, status, provider: "openai" })
     } finally {
+      this.turnAttachments = []
       this.abortController = null
     }
   }
@@ -141,8 +148,41 @@ export class OpenAiSession implements CapySession {
     this.alive = false
   }
 
+  async structured<T = unknown>(
+    messages: readonly StructuredMessage[],
+    schema: JsonSchema,
+  ): Promise<T> {
+    const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: "system", content: this.opts.systemPrompt },
+      ...messages.map((m) =>
+        m.role === "assistant"
+          ? { role: "assistant" as const, content: m.content }
+          : { role: "user" as const, content: toOpenAiUserContent(m.content) },
+      ),
+    ]
+
+    // `strict` is our own marker on the schema, not a JSON-schema keyword;
+    // it rides on the json_schema wrapper, not inside the schema OpenAI sees.
+    const completion = await this.client.chat.completions.create({
+      model: this.opts.model,
+      messages: requestMessages,
+      max_completion_tokens: MAX_TOKENS,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "structured_output",
+          schema: schemaBody(schema),
+          ...(schema.strict === true ? { strict: true } : {}),
+        },
+      },
+    })
+
+    const text = completion.choices[0]?.message.content ?? ""
+    return parseStructured<T>(text, schema)
+  }
+
   private async runAgenticLoop(): Promise<void> {
-    const tools = getOpenAiTools(this.opts.mode)
+    const tools = OPENAI_TOOLS
 
     const completedBlocks: ContentBlock[] = []
     const emitContent = () => {
@@ -304,6 +344,9 @@ export class OpenAiSession implements CapySession {
             repo: this.opts.repo,
             fileAdapter: this.opts.fileAdapter,
             budgetPath: this.opts.budgetPath,
+            attachments: [...this.turnAttachments],
+            importSupported: this.opts.importSupported,
+            pdfSupported: this.opts.pdfSupported,
           })
         } catch (err) {
           ok = false

@@ -23,7 +23,6 @@ function makeOptions(): SessionOptions {
     budgetPath: "/budget",
     mcpServerPath: "mcp/server.js",
     systemPrompt: "you are capy",
-    mode: "chat",
     onEvent: vi.fn(),
     repo: {} as BudgetRepository,
     fileAdapter: {} as FileAdapter,
@@ -132,12 +131,13 @@ describe("createIntelligenceSession", () => {
     expect(ctor).toHaveBeenCalledWith({
       budgetPath: opts.budgetPath,
       systemPrompt: opts.systemPrompt,
-      mode: opts.mode,
       apiKey: "sk-ant-1",
       model: "claude-sonnet-4-6",
       onEvent: opts.onEvent,
       repo: opts.repo,
       fileAdapter: opts.fileAdapter,
+      importSupported: true,
+      pdfSupported: true,
     })
   })
 
@@ -157,29 +157,13 @@ describe("createIntelligenceSession", () => {
     expect(ctor).toHaveBeenCalledWith({
       budgetPath: opts.budgetPath,
       systemPrompt: opts.systemPrompt,
-      mode: opts.mode,
       apiKey: "sk-openai-1",
       model: "gpt-5.5",
       onEvent: opts.onEvent,
       repo: opts.repo,
       fileAdapter: opts.fileAdapter,
+      importSupported: true,
+      pdfSupported: false,
     })
-  })
-
-  it("threads mode through to the api ctor", () => {
-    const ctor = vi.fn().mockImplementation(() => makeStubSession())
-    const opts: SessionOptions = { ...makeOptions(), mode: "import" }
-    createIntelligenceSession({
-      config: {
-        ...DEFAULT_INTELLIGENCE_CONFIG,
-        provider: "anthropic",
-        anthropic: { apiKey: "sk-ant-1", model: "claude-sonnet-4-6" },
-      },
-      adapters: { anthropic: ctor },
-      options: opts,
-    })
-    expect(ctor).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "import" }),
-    )
   })
 })

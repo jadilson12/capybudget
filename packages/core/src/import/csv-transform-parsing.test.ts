@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { transformCsv, parseCurrencyToCents } from "./csv-transform";
+import {
+  transformCsv,
+  parseCurrencyToCents,
+  DEFAULT_TRANSFER_PATTERNS,
+} from "./csv-transform";
 import { baseMapping, makeRow } from "./csv-transform.test-helpers";
 
 // ── 2. Single signed amount column ─────────────────────────────────
@@ -183,6 +187,17 @@ describe("date format parsing", () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toContain("unsupported date format");
   });
+
+  it("a literal date applies to every row, with no date column read", () => {
+    const mapping = baseMapping({ date: { literal: "2026-06-07" } });
+    const rows = [
+      makeRow({ Description: "A", Amount: "10.00" }),
+      makeRow({ Description: "B", Amount: "20.00" }),
+    ];
+    const result = transformCsv(rows, mapping);
+    expect(result.errors).toHaveLength(0);
+    expect(result.transactions.map((t) => t.date)).toEqual(["2026-06-07", "2026-06-07"]);
+  });
 });
 
 // ── 5. Type detection ──────────────────────────────────────────────
@@ -252,6 +267,77 @@ describe("type detection", () => {
       mapping,
     );
     expect(r1.transactions[0].type).toBe("transfer");
+  });
+});
+
+// ── 5b. Built-in default transfer patterns ─────────────────────────
+
+describe("default transfer patterns", () => {
+  it("classifies an ACH internet transfer when the model supplies no patterns", () => {
+    const mapping = baseMapping({ typeDetection: { method: "amount_sign" } });
+    const rows = [
+      makeRow({
+        Date: "2025-01-01",
+        Description: "Ach Deposit Internet Transfer From Account En",
+        Amount: "666.10",
+      }),
+    ];
+    const result = transformCsv(rows, mapping);
+    // Positive amount would otherwise be income — the default pattern wins.
+    expect(result.transactions[0].type).toBe("transfer");
+  });
+
+  it("does not false-match a merchant that merely contains 'transfer'", () => {
+    const mapping = baseMapping({ typeDetection: { method: "amount_sign" } });
+    const rows = [
+      makeRow({ Date: "2025-01-01", Description: "Transferwise Inc", Amount: "-50.00" }),
+      makeRow({ Date: "2025-01-02", Description: "Money Transfer Inc", Amount: "-25.00" }),
+    ];
+    const result = transformCsv(rows, mapping);
+    expect(result.transactions[0].type).toBe("expense");
+    expect(result.transactions[1].type).toBe("expense");
+  });
+
+  it("covers a wire transfer phrasing the model did not supply", () => {
+    const mapping = baseMapping({ typeDetection: { method: "amount_sign" } });
+    const rows = [
+      makeRow({ Date: "2025-01-01", Description: "Outgoing Wire Transfer Cc Payment", Amount: "-1200.00" }),
+    ];
+    const result = transformCsv(rows, mapping);
+    expect(result.transactions[0].type).toBe("transfer");
+  });
+
+  it("model-supplied patterns still classify additively", () => {
+    // "xfer" is not a default; only the model-supplied pattern can catch it.
+    const mapping = baseMapping({
+      typeDetection: { method: "amount_sign", transferPatterns: ["xfer"] },
+    });
+    const rows = [
+      makeRow({ Date: "2025-01-01", Description: "XFER from checking", Amount: "500.00" }),
+    ];
+    const result = transformCsv(rows, mapping);
+    expect(result.transactions[0].type).toBe("transfer");
+  });
+
+  it("classifies BofA's intra-bank card-payment phrasing", () => {
+    const mapping = baseMapping({ typeDetection: { method: "amount_sign" } });
+    const rows = [
+      makeRow({
+        Date: "2025-01-01",
+        Description: "Mobile Banking payment to CRD 9044 Confirmation# 2241",
+        Amount: "-1424.96",
+      }),
+    ];
+    const result = transformCsv(rows, mapping);
+    expect(result.transactions[0].type).toBe("transfer");
+  });
+
+  it("every default phrase is multi-word and anchored, never a bare keyword", () => {
+    // Guards against a bare/over-broad phrase ("transfer", "payment") sneaking
+    // into the set — each pattern must carry its own context.
+    for (const pattern of DEFAULT_TRANSFER_PATTERNS) {
+      expect(pattern.split(/\s+/).length).toBeGreaterThan(1);
+    }
   });
 });
 
@@ -401,22 +487,6 @@ describe("column references", () => {
     const rows = [makeRow({ Date: "2025-01-01", Description: "Test", Amount: "-5.00" })];
     const result = transformCsv(rows, mapping);
     expect(result.transactions[0].sourceCategory).toBe("");
-  });
-
-  it("memo resolves when provided", () => {
-    const mapping = baseMapping({
-      memo: { column: "Memo" },
-    });
-    const rows = [makeRow({ Date: "2025-01-01", Description: "Test", Amount: "-5.00", Memo: "My note" })];
-    const result = transformCsv(rows, mapping);
-    expect(result.transactions[0].memo).toBe("My note");
-  });
-
-  it("memo is empty string when null in mapping", () => {
-    const mapping = baseMapping({ memo: null });
-    const rows = [makeRow({ Date: "2025-01-01", Description: "Test", Amount: "-5.00" })];
-    const result = transformCsv(rows, mapping);
-    expect(result.transactions[0].memo).toBe("");
   });
 });
 
