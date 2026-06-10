@@ -9,7 +9,7 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.0.0 — 2026-06-09
 
 - **Import** - Redesigned around a deterministic pipeline: imported transactions are matched against your own history (merchants, categories, duplicates) before AI categorizes only the leftovers, in batches — fewer tokens, more accurate the more you import.
 - **Import** - Live two-stage progress (Normalizing → Enhancing) with real row-level meters — extraction streams its rows so long files visibly advance — and a read-only preview that fills in as it runs; interrupt and resume anytime, and re-running enrichment only touches rows you haven't already mapped.
