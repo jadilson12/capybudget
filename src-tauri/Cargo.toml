@@ -1,6 +1,6 @@
 [package]
 name = "capybudget"
-version = "0.2.4"
+version = "1.0.0"
 description = "Personal finance tracker with CSV-backed storage"
 authors = ["you"]
 edition = "2021"
