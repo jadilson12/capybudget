@@ -48,6 +48,8 @@ interface ImportTableProps {
   categories: Category[];
   accounts: Account[];
   accountMapping: Record<string, string>;
+  /** Opens the Map-accounts dialog (the ACCOUNT cell is its trigger). */
+  onOpenAccountMapping: () => void;
   duplicateIds: Set<string>;
 }
 
@@ -128,6 +130,7 @@ export function ImportTable({
   categories,
   accounts,
   accountMapping,
+  onOpenAccountMapping,
   duplicateIds,
 }: ImportTableProps) {
   const [editingCell, setEditingCell] = useState<{
@@ -357,9 +360,12 @@ export function ImportTable({
                     />
                   </div>
                 ) : (
-                  <span className="truncate block">
-                    {txn.sourceAccount || <span className="text-muted-foreground/40 italic">none</span>}
-                  </span>
+                  <MappedAccountCell
+                    sourceAccount={txn.sourceAccount}
+                    accounts={accounts}
+                    accountMapping={accountMapping}
+                    onOpenMapping={onOpenAccountMapping}
+                  />
                 )}
               </TableCell>
 
@@ -386,6 +392,52 @@ export function ImportTable({
         })}
       </TableBody>
     </Table>
+  );
+}
+
+// ── Mapped Account Cell ──────────────────────────────────────────
+
+/**
+ * The ACCOUNT column for non-transfer rows shows where the row will actually
+ * land: the mapped target account's name, or the imported name with a "new"
+ * tag when merge would create it. The cell is the Map-accounts dialog's
+ * trigger, but reads as quiet text — mapping is rarely what the user is here
+ * for, and a button shape would impersonate the transfer rows' dropdowns. The
+ * raw imported → target relationship lives in the dialog, not the cell.
+ */
+function MappedAccountCell({
+  sourceAccount,
+  accounts,
+  accountMapping,
+  onOpenMapping,
+}: {
+  sourceAccount: string;
+  accounts: Account[];
+  accountMapping: Record<string, string>;
+  onOpenMapping: () => void;
+}) {
+  if (!sourceAccount) {
+    return <span className="text-muted-foreground/40 italic">none</span>;
+  }
+  const targetId = accountMapping[sourceAccount];
+  const target =
+    targetId && targetId !== "__create__" ? accounts.find((a) => a.id === targetId) : undefined;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenMapping}
+      className="group flex w-full min-w-0 cursor-pointer items-center gap-1.5 text-left hover:text-foreground transition-colors"
+    >
+      <span className="truncate underline-offset-2 group-hover:underline">
+        {target ? target.name : sourceAccount}
+      </span>
+      {!target && (
+        <span className="shrink-0 rounded bg-brand/10 px-1 py-px text-[10px] font-medium text-brand">
+          new
+        </span>
+      )}
+    </button>
   );
 }
 

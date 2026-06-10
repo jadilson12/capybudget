@@ -5,9 +5,16 @@ import type { ImportTransaction } from "@capybudget/core";
 import type { StagingStore } from "@capybudget/intelligence";
 
 // The heavy table/mapping subtrees (CategorySelector, AccountSelector, …) aren't
-// what this test exercises — the merge race wiring is.
-vi.mock("./import-table", () => ({ ImportTable: () => null }));
-vi.mock("./import-mapping", () => ({ ImportMapping: () => null }));
+// what this test exercises — the merge race and dialog wiring are. The table
+// mock exposes its Map-accounts trigger so the dialog plumbing is reachable.
+vi.mock("./import-table", () => ({
+  ImportTable: ({ onOpenAccountMapping }: { onOpenAccountMapping: () => void }) => (
+    <button onClick={onOpenAccountMapping}>open account mapping</button>
+  ),
+}));
+vi.mock("./import-mapping", () => ({
+  ImportMappingRows: () => <div data-testid="mapping-rows" />,
+}));
 
 const { merge, flushWriteBack, dataReturn } = vi.hoisted(() => ({
   merge: vi.fn(),
@@ -39,6 +46,9 @@ const TXN: ImportTransaction = {
 
 beforeEach(() => {
   merge.mockReset();
+  // mockReset (not mockClear) — it drops any per-test mockImplementation and
+  // restores the original async no-op, so tests can't leak into each other.
+  flushWriteBack.mockReset();
   Object.assign(dataReturn, {
     transactions: [TXN],
     selectedIds: new Set(["imp-1"]),
@@ -59,23 +69,24 @@ beforeEach(() => {
   });
 });
 
-describe("ImportPreview — duplicates banner", () => {
-  function renderPreview() {
-    return render(
-      <ImportPreview
-        budgetPath="/b"
-        staging={{} as StagingStore}
-        rowsVersion={0}
-        running={false}
-        onStop={vi.fn()}
-        onStopRun={vi.fn(async () => {})}
-        onEnrich={vi.fn()}
-        onMergeComplete={vi.fn()}
-      />,
-    );
-  }
+function renderPreview(props: Partial<Parameters<typeof ImportPreview>[0]> = {}) {
+  return render(
+    <ImportPreview
+      budgetPath="/b"
+      staging={{} as StagingStore}
+      rowsVersion={0}
+      running={false}
+      onStopRun={vi.fn(async () => {})}
+      onEnrich={vi.fn()}
+      onEnrichControl={vi.fn()}
+      onMergeComplete={vi.fn()}
+      {...props}
+    />,
+  );
+}
 
-  it("splits the copy between certain and possible duplicates", () => {
+describe("ImportPreview — run notes panel", () => {
+  it("splits the duplicates copy between certain and possible matches", () => {
     Object.assign(dataReturn, {
       duplicateIds: new Set(["a", "b", "c", "d", "e", "f"]),
       possibleDuplicateCount: 2,
@@ -105,9 +116,84 @@ describe("ImportPreview — duplicates banner", () => {
       screen.getByText("1 possible duplicate (close date match) — review before merging"),
     ).toBeInTheDocument();
   });
+
+  it("groups the duplicates and issues notes into one panel", () => {
+    Object.assign(dataReturn, {
+      duplicateIds: new Set(["a"]),
+      possibleDuplicateCount: 0,
+      uncategorizedCount: 3,
+      lowConfidenceCount: 22,
+    });
+    renderPreview();
+
+    const duplicates = screen.getByText("1 duplicate detected — already unselected");
+    const issues = screen.getByText("3 uncategorized, 22 low confidence");
+    expect(duplicates.closest("div")?.parentElement).toBe(issues.closest("div")?.parentElement);
+  });
+
+  it("hides the issues note while a run is in flight (counts still settling)", () => {
+    Object.assign(dataReturn, { uncategorizedCount: 3, lowConfidenceCount: 22 });
+    renderPreview({ running: true });
+
+    expect(screen.queryByText(/uncategorized/)).toBeNull();
+  });
 });
 
-describe("ImportPreview — merge races no in-flight batch", () => {
+describe("ImportPreview — enrich control", () => {
+  it("reports the enrichable count up and flushes edits before triggering enrich", async () => {
+    const order: string[] = [];
+    flushWriteBack.mockImplementation(async () => {
+      order.push("flush");
+    });
+    const onEnrich = vi.fn(() => order.push("enrich"));
+    const onEnrichControl = vi.fn();
+    Object.assign(dataReturn, { incompleteCount: 7 });
+
+    const { unmount } = renderPreview({ onEnrich, onEnrichControl });
+
+    const control = onEnrichControl.mock.lastCall?.[0] as { count: number; run: () => void };
+    expect(control.count).toBe(7);
+
+    control.run();
+    await waitFor(() => expect(onEnrich).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["flush", "enrich"]);
+
+    unmount();
+    expect(onEnrichControl).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("ImportPreview — account mapping dialog", () => {
+  it("opens the Map-accounts dialog from the table's ACCOUNT-cell trigger", async () => {
+    Object.assign(dataReturn, { sourceAccounts: ["BOFA CHK 1234"] });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "open account mapping" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Map accounts")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("mapping-rows")).toBeInTheDocument();
+  });
+
+  it("keeps the merge dialog confirmation-only — no mapping rows", async () => {
+    Object.assign(dataReturn, { sourceAccounts: ["BOFA CHK 1234"] });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByTestId("mapping-rows")).toBeNull();
+  });
+});
+
+describe("ImportPreview — merge gating", () => {
+  it("disables Merge while a run is in flight", () => {
+    renderPreview({ running: true });
+    expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
+  });
+
   it("stops + detaches the run before merge clears staging", async () => {
     const order: string[] = [];
     const onStopRun = vi.fn(async () => {
@@ -119,18 +205,7 @@ describe("ImportPreview — merge races no in-flight batch", () => {
     });
     const onMergeComplete = vi.fn();
 
-    render(
-      <ImportPreview
-        budgetPath="/b"
-        staging={{} as StagingStore}
-        rowsVersion={0}
-        running={true}
-        onStop={vi.fn()}
-        onStopRun={onStopRun}
-        onEnrich={vi.fn()}
-        onMergeComplete={onMergeComplete}
-      />,
-    );
+    renderPreview({ onStopRun, onMergeComplete });
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Merge" }));
