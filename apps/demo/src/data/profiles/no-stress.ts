@@ -164,7 +164,7 @@ export const noStress: DemoProfile = {
     {
       category: "Allowances",
       accountId: CASH,
-      merchants: ["ATM Withdrawal"],
+      merchants: ["Farmers Market", "Valet Parking", "Barbershop"],
       amountRange: [10_000, 20_000],
       probabilityPerMonth: 0.6,
     },
@@ -237,6 +237,15 @@ export const noStress: DemoProfile = {
       amount: 200_000,
       dayOfMonth: 16,
       note: "Brokerage contribution",
+    },
+    // Funds the cash spending above; sized over its worst-case month ($200).
+    {
+      fromAccountId: CHECKING,
+      toAccountId: CASH,
+      cadence: "monthly",
+      amount: 25_000,
+      dayOfMonth: 10,
+      note: "ATM withdrawal",
     },
   ],
 };
