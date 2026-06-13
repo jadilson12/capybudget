@@ -84,11 +84,11 @@ Every `content` event carries the **complete cumulative blocks array** for the c
 Adapter accumulation:
 
 - Anthropic + OpenAI adapters: a `completedBlocks` array lives outside the agentic loop. Each iteration appends a fresh text block (driven by streamed text deltas) and pushes any tool-use blocks (rendered or `tool-activity`). The array survives across tool-result rounds.
-- Claude Code adapter: the CLI emits each model turn's `assistant` event as a per-turn snapshot. The decoder is stateless and forwards `message.id` as the optional `messageId` on `StreamEvent.content`; the session stitches turns into one cumulative array, promoting blocks into a finished-turns buffer when `messageId` changes.
+- Claude Code adapter: the CLI emits one `assistant` event per content block, all sharing the message's `id` (the id persists even across in-turn tool boundaries). The decoder is stateless and forwards `message.id` as the optional `messageId` on `StreamEvent.content`; `CycleAccumulator` stitches events into one cumulative array — appending same-id text blocks as distinct blocks (replacing in place only when the incoming text extends the in-progress one, the cumulative-snapshot shape older CLIs streamed), promoting blocks into a finished-turns buffer when `messageId` changes, and dropping text for the rest of the cycle once a rendered followups block lands (see the terminal-signal tool).
 
 Adapters emit `StreamEvent`s directly (`content` / `tool-result` / `done` / `error`) — there's no transport-level event layer above this.
 
-Adapters surface `done` off the model's terminal event (Anthropic `message` / OpenAI `finish_reason` / CLI assistant `stop_reason`) and abort the transport early rather than waiting for SSE or subprocess drain — gating on the transport adds seconds of post-content latency. The Claude CLI parser keeps the trailing `result` line as a safety-net `done` emitter for the case where no `stop_reason` arrives, so the UI never hangs.
+Adapters surface `done` off the model's terminal event (Anthropic `message` / OpenAI `finish_reason`) and abort the transport early rather than waiting for SSE drain — gating on the transport adds seconds of post-content latency. The Claude CLI populates no `stop_reason` on assistant events; its `done` rides the trailing `result` line. The parser still emits `done` early off a terminal `stop_reason` should one appear, with the `result` line as the guaranteed emitter so the UI never hangs.
 
 ## Structured Output
 
@@ -110,6 +110,7 @@ Spawns `claude` via Tauri's shell plugin in pipe mode with stream-json I/O on bo
 - `--disallowedTools "TodoWrite,Task,Bash,Edit,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,KillBash,BashOutput"` — explicitly block the CLI's stock built-ins. Even when omitted from the allowlist the model still knows they exist and the CLI's baked-in system prompt nudges it to deliberate about them ("should I use TodoWrite for this?") — disallowing silences that meta-narration.
 - `--add-dir <budget-path>` — grant Read access to the budget folder
 - `--setting-sources ""` — skip CLAUDE.md files
+- env `ENABLE_TOOL_SEARCH=false` — disables the CLI's deferred MCP tool loading (undocumented knob) so every `mcp__capy__*` schema loads upfront. With deferral on, the model must fetch schemas via ToolSearch mid-turn and sometimes calls render tools blind with invented payloads.
 
 Lifecycle: spawn lazily on first message, fresh session ID per spawn, process survives overlay close/reopen, `kill()` ends it. Stop / restart recovery (serialize prior conversation, prepend `[Previous conversation]` on next send) is unique to this adapter — API adapters get a simpler abort-and-continue model.
 
@@ -150,7 +151,7 @@ Single source of truth shared between transports:
   - **start_import** — the chat on-ramp into Smart Import. Takes no arguments: it stages the files attached to the in-flight chat turn into `.capy/import/sources/` and marks the run so the Import screen auto-starts the orchestrator. Capy calls this for any uploaded file instead of reading it and creating transactions itself. See **Import On-Ramp** below.
   - **read_file** — generic budget-folder text reader; mirrors what Claude CLI's built-in `Read` provides natively
   - **read_spec** — reads one of the app's design docs (`specs/*.md`). Content is bundled at build time into `specs.generated.ts` — no filesystem access, no path resolution surface. Use when capy needs implementation detail beyond what the system prompt already embeds.
-  - **Render tools** — no-op on dispatch (return `"Rendered."`); the frontend intercepts the `tool_use` event and emits the corresponding ContentBlock
+  - **Render tools** — dispatch validates the payload against the render-map builders: valid calls return `"Rendered."`, malformed or empty-data input returns an error result. The frontend intercepts the `tool_use` event and emits the corresponding ContentBlock. See **Render tools** below.
 
 All filesystem access goes through the `FileAdapter` on the context, so the same handler runs against node fs (MCP server) and Tauri fs (API adapters in the renderer). The `FileAdapter` interface covers core CSV repo ops (read/write/rename/join) plus the staging-handler ops (`mkdir`, `exists`, `readDir`, `appendFile`, `remove`, `stat`) the import pipeline and `start_import` use.
 
@@ -175,9 +176,9 @@ The app invalidates caches per mutation tool call (not per turn) so the UI refle
 | `render_chart` | `{ title, type: "bar" \| "donut", data: [{label, value}] }` | Horizontal bar chart or SVG donut chart with legend, per `type` |
 | `render_followups` | `{ chips: [{label, prompt}] }` (1–4 items) | Follow-up suggestion chips after an answer. |
 
-No-ops on the dispatch side — they carry structured data from AI to frontend via `tool_use` events.
+Dispatch validates the payload with the same rules the frontend renderer applies — malformed or empty-data input returns an error result so the model corrects itself and retries. Valid calls are otherwise no-ops on the dispatch side; they carry structured data from AI to frontend via `tool_use` events.
 
-`render_followups` is a **terminal-signal tool**: when the model calls it, the assistant turn is over. The API adapters dispatch the call (so the UI gets the chips) and push the tool_result to history, then exit the agentic loop without making another request. Skipping the ack round-trip saves a full stream per turn. The Claude CLI runs the loop in-subprocess; the prompt tells the model to stay silent after calling `render_followups`, and the stream parser suppresses any empty/whitespace-only assistant text it still emits.
+`render_followups` is a **terminal-signal tool**: when the model calls it successfully, the assistant turn is over. The API adapters dispatch the call (so the UI gets the chips) and push the tool_result to history, then exit the agentic loop without making another request. A followups call that fails validation is not terminal — the loop continues so the model sees the error result and recovers. Skipping the ack round-trip saves a full stream per turn. The Claude CLI runs the loop in-subprocess; the prompt tells the model to stay silent after calling `render_followups`, and the accumulator drops any text it still emits for the rest of the cycle. The drop latch arms only on a successfully rendered followups block — after a failed render the model's recovery text still shows.
 
 ## MCP Server (External Agents)
 
@@ -297,7 +298,7 @@ This is a hard backstop on the chat agent loop, not the normal path. A well-form
 Enforcement varies by adapter:
 
 - **Anthropic / OpenAI** count tool calls inline as they dispatch them. When the cap trips mid-turn, remaining tool_use blocks in the same turn receive a budget-exhausted error result (so the API doesn't see dangling tool_use) and the agentic loop exits without making the next request.
-- **Claude CLI** parses each cumulative assistant snapshot, dedups tool_use IDs into a Set, and kills the subprocess + surfaces the error event when the Set grows past the cap. The CLI can't be told to stop from outside, so termination is the cleanest signal we can give.
+- **Claude CLI** parses each assistant event, dedups tool_use IDs into a Set, and kills the subprocess + surfaces the error event when the Set grows past the cap. The CLI can't be told to stop from outside, so termination is the cleanest signal we can give.
 
 ## Per-provider Stop / Restart
 

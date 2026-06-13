@@ -18,10 +18,9 @@ const ANTHROPIC_TOOLS: Anthropic.Tool[] = getToolDefinitions().map((t) => ({
 
 const RENDER_TOOL_MAP = buildRenderToolMap()
 
-function toolUseToContentBlock(name: string, input: Record<string, unknown>): ContentBlock | null {
-  const renderFn = RENDER_TOOL_MAP[name]
-  if (renderFn) return renderFn(input)
-  return { type: "tool-activity", tool: name }
+function toolUseToContentBlock(name: string, input: Record<string, unknown>): ContentBlock {
+  const rendered = RENDER_TOOL_MAP[name]?.(input) ?? null
+  return rendered ?? { type: "tool-activity", tool: name }
 }
 
 type UserContentBlock = Exclude<Anthropic.MessageParam["content"], string>[number]
@@ -244,14 +243,13 @@ export class AnthropicSession implements CapySession, StructuredSession {
         if (block.type === "tool_use") {
           accumulatedText = ""
           currentTextDraftIndex = null
-          const cb = toolUseToContentBlock(
-            block.name,
-            (block.input ?? {}) as Record<string, unknown>,
+          completedBlocks.push(
+            toolUseToContentBlock(
+              block.name,
+              (block.input ?? {}) as Record<string, unknown>,
+            ),
           )
-          if (cb) {
-            completedBlocks.push(cb)
-            emitContent()
-          }
+          emitContent()
         } else if (block.type === "text") {
           accumulatedText = ""
           currentTextDraftIndex = null
@@ -279,7 +277,6 @@ export class AnthropicSession implements CapySession, StructuredSession {
       let terminalToolSeen = false
       for (const block of finalMessage.content) {
         if (block.type !== "tool_use") continue
-        if (block.name === RENDER_FOLLOWUPS_TOOL_NAME) terminalToolSeen = true
         this.toolCallCount++
         if (this.toolCallCount > SESSION_TOOL_CALL_BUDGET) {
           budgetExhausted = true
@@ -309,6 +306,9 @@ export class AnthropicSession implements CapySession, StructuredSession {
           ok = false
           resultText = `Error: ${err instanceof Error ? err.message : String(err)}`
         }
+        // A failed followups call is not terminal — the loop must continue so
+        // the model sees the error result and recovers.
+        if (ok && block.name === RENDER_FOLLOWUPS_TOOL_NAME) terminalToolSeen = true
         this.opts.onEvent({ type: "tool-result", tool: block.name, id: block.id, ok })
         toolResults.push({
           type: "tool_result",
