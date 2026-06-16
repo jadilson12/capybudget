@@ -15,7 +15,7 @@ export interface CategoryBreakdown {
 }
 
 export interface NetWorthPoint {
-  date: string; // ISO date string (first of month)
+  date: string; // ISO date string (last day of the labeled month)
   netWorth: number; // cents
   byAccount: Record<string, number>; // accountId → balance at that point
 }
@@ -99,18 +99,28 @@ function breakdownByCategory(
   return result.sort((a, b) => b.total - a.total);
 }
 
-/** Calculate net worth at each month boundary within the range, plus the end date.
- *  Single-pass O(transactions log transactions + points) algorithm. */
+/** Net worth at the end of each month within the range: a point labeled month M
+ *  is net worth as of the last day of M (it reflects every transaction through
+ *  that month's end). Single-pass O(transactions log transactions + points).
+ *
+ *  Archived accounts ARE counted: archiving requires a zero derived balance, so an
+ *  archived account contributes $0 to the latest point but correctly restores the
+ *  running balance at past points (e.g. a credit card that ran negative in 2019
+ *  before being paid off and closed). Only `excludeFromNetWorth` accounts — which
+ *  may hold a non-zero balance and are never part of net worth — are dropped.
+ *
+ *  `includeAccountIds`, when provided, is the source of truth for which accounts
+ *  to count — `archived`/`excludeFromNetWorth` are ignored, since the caller has
+ *  already decided. */
 export function getNetWorthOverTime(
   accounts: Account[],
   transactions: Transaction[],
   range: DateRange,
+  includeAccountIds?: Set<string>,
 ): NetWorthPoint[] {
-  const activeAccountIds = new Set(
-    accounts
-      .filter((a) => !a.archived && !a.excludeFromNetWorth)
-      .map((a) => a.id),
-  );
+  const activeAccountIds =
+    includeAccountIds ??
+    new Set(accounts.filter((a) => !a.excludeFromNetWorth).map((a) => a.id));
 
   // Sort transactions by datetime once
   const sorted = [...transactions].sort(
@@ -120,23 +130,7 @@ export function getNetWorthOverTime(
   // Pre-compute timestamps to avoid repeated Date construction
   const txTimestamps = sorted.map((t) => new Date(t.datetime).getTime());
 
-  // Build list of unique month boundaries within range
-  const dates: Date[] = [];
-  const cursor = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
-  if (cursor < range.start) {
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  while (cursor < range.end) {
-    dates.push(new Date(cursor));
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  // Include end date, deduplicated
-  const lastDate = dates[dates.length - 1];
-  if (!lastDate || range.end.getTime() !== lastDate.getTime()) {
-    dates.push(new Date(range.end));
-  }
-
-  // Single pass: walk transactions and emit points at each boundary
+  // Single pass: cumulative balance walk, emitting one point per month-end.
   const balances: Record<string, number> = {};
   for (const id of activeAccountIds) {
     balances[id] = 0;
@@ -145,11 +139,22 @@ export function getNetWorthOverTime(
   let txIdx = 0;
   const points: NetWorthPoint[] = [];
 
-  for (const date of dates) {
-    const dateMs = date.getTime();
+  // First month to emit: the month containing/after range.start.
+  const cursor = new Date(range.start.getFullYear(), range.start.getMonth(), 1);
+  if (cursor < range.start) {
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  const endMs = range.end.getTime();
 
-    // Advance through transactions up to this boundary
-    while (txIdx < sorted.length && txTimestamps[txIdx] < dateMs) {
+  while (cursor.getTime() < endMs) {
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth();
+    const firstOfNextMonth = new Date(year, month + 1, 1).getTime();
+    // Exclusive upper bound for the cumulative walk: include the whole month,
+    // but never reach past the range's end (a partial current month stops there).
+    const threshold = Math.min(firstOfNextMonth, endMs);
+
+    while (txIdx < sorted.length && txTimestamps[txIdx] < threshold) {
       const t = sorted[txIdx];
       if (activeAccountIds.has(t.accountId)) {
         balances[t.accountId] = (balances[t.accountId] ?? 0) + t.amount;
@@ -157,12 +162,19 @@ export function getNetWorthOverTime(
       txIdx++;
     }
 
+    // Display date = last day of M, clamped to range.end so a partial current
+    // month stays honest. The clamp never escapes M, so the UI still labels M.
+    const lastDayOfMonth = new Date(year, month + 1, 0).getTime();
+    const displayMs = Math.min(lastDayOfMonth, endMs);
+
     const byAccount: Record<string, number> = { ...balances };
     points.push({
-      date: date.toISOString(),
+      date: new Date(displayMs).toISOString(),
       netWorth: Object.values(byAccount).reduce((s, v) => s + v, 0),
       byAccount,
     });
+
+    cursor.setMonth(month + 1);
   }
 
   return points;
