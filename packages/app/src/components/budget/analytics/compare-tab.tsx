@@ -20,6 +20,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ChartSwitcher } from "./chart-switcher";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NO_DATA_YET } from "./empty-copy";
+import { TransactionsModal } from "@/components/budget/transactions-modal";
+import { formatCountAndTotal } from "./format-range";
+import {
+  bucketWindow,
+  filterForCompareDrilldown,
+  resolveClickedRow,
+  type CompareChartRow,
+  type CompareDrilldown,
+  type CompareViewMode,
+} from "./compare-drilldown";
 
 // ── Constants ──
 
@@ -42,7 +52,7 @@ const STORAGE_KEY_PREFIX = "capybudget:compare-selected-";
 
 // ── Types ──
 
-type ViewMode = "expense" | "income";
+type ViewMode = CompareViewMode;
 
 const VIEW_OPTIONS: Array<{ value: ViewMode; label: string }> = [
   { value: "expense", label: "Expenses" },
@@ -328,18 +338,53 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
     });
   }, [seriesData.series, pick.colorMap]);
 
-  // Chart data shape: { month, [categoryName]: cents, ... }
+  // Chart data shape: { month, __start, __end, [categoryName]: cents, ... }.
+  // Each row carries its bucket's own transaction window so a click maps
+  // deterministically back to a date range. The `__`-prefixed keys never
+  // render as lines — only `seriesWithColor` keys do.
   const chartData = useMemo(() => {
     const nameById = new Map(seriesData.series.map((s) => [s.categoryId, s.categoryName]));
-    return seriesData.points.map((point) => {
-      const row: Record<string, string | number> = { month: point.month };
+    return seriesData.points.map((point): CompareChartRow => {
+      const win = bucketWindow(point.date, granularity, dateRange);
+      const row: CompareChartRow = {
+        month: point.month,
+        __start: win.start.toISOString(),
+        __end: win.end.toISOString(),
+      };
       for (const [catId, amt] of Object.entries(point.byCategory)) {
         const name = nameById.get(catId) ?? "Uncategorized";
         row[name] = amt;
       }
       return row;
     });
-  }, [seriesData]);
+  }, [seriesData, granularity, dateRange]);
+
+  const [drilldown, setDrilldown] = useState<CompareDrilldown | null>(null);
+
+  const drilldownTransactions = useMemo(
+    () => (drilldown ? filterForCompareDrilldown(transactions, drilldown) : []),
+    [drilldown, transactions],
+  );
+
+  // A LineChart wrapper `onClick` in Recharts 3.x hands back a
+  // `MouseHandlerDataParam` (see recharts/types/synchronisation/types) — it
+  // has NO `activePayload`. It carries the active bucket's `activeTooltipIndex`
+  // (a number for a categorical chart) and `activeLabel` (the X value). We own
+  // `chartData`, so resolve the clicked row from the index, falling back to a
+  // label match if a future Recharts tweak stops populating the index. No
+  // active bucket or no selected categories → no-op.
+  function handleChartClick(state: unknown) {
+    if (!anySelected) return;
+    const s = state as { activeTooltipIndex?: unknown; activeLabel?: unknown } | null;
+    const row = resolveClickedRow(chartData, s?.activeTooltipIndex, s?.activeLabel);
+    if (!row) return;
+    setDrilldown({
+      label: row.month,
+      range: { from: new Date(row.__start), to: new Date(row.__end) },
+      categoryIds: selectedIdsForCore,
+      mode: viewMode,
+    });
+  }
 
   if (!periodHasData) {
     return (
@@ -447,7 +492,12 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
           </p>
         ) : (
           <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+            <LineChart
+              data={chartData}
+              margin={{ top: 5, right: 20, bottom: 5, left: 10 }}
+              onClick={handleChartClick}
+              className="cursor-pointer"
+            >
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
               <XAxis
                 dataKey="month"
@@ -460,7 +510,19 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
                 className="text-muted-foreground"
                 width={65}
               />
-              <Tooltip content={<CompareTooltipContent />} />
+              <Tooltip
+                content={<CompareTooltipContent />}
+                // A tall tooltip (many categories selected) can reach down into
+                // the legend band; the legend is an HTML overlay with no z-index,
+                // so the tooltip just needs to claim a positive one to sit above
+                // it. Kept low — well under the portalled dialog's z-50.
+                wrapperStyle={{ zIndex: 10 }}
+                cursor={{
+                  stroke: "var(--brand)",
+                  strokeWidth: 1.5,
+                  strokeDasharray: "4 3",
+                }}
+              />
               <Legend wrapperStyle={{ fontSize: "12px" }} />
               {seriesWithColor.map((s) => (
                 <Line
@@ -476,6 +538,24 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
           </ResponsiveContainer>
         )}
       </div>
+
+      <TransactionsModal
+        open={drilldown !== null}
+        onOpenChange={(open) => !open && setDrilldown(null)}
+        transactions={drilldownTransactions}
+        lockedFilters={
+          drilldown
+            ? {
+                categoryIds: drilldown.categoryIds,
+                dateRange: { from: drilldown.range.from, to: drilldown.range.to },
+              }
+            : {}
+        }
+        title={drilldown?.label ?? ""}
+        // The bucket's date label is already the modal title, so the subtitle
+        // is just count/total — no range label prefix.
+        subtitle={drilldown ? formatCountAndTotal(drilldownTransactions) : undefined}
+      />
     </div>
   );
 }
