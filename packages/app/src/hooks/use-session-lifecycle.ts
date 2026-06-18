@@ -24,6 +24,8 @@ import type { BudgetRepository, FileAdapter } from "@capybudget/persistence";
 export interface SessionLifecycleOptions {
   budgetPath: string;
   mcpServerPath: string;
+  /** Budget's display currency (ISO 4217), threaded into the adapter's tool dispatch. */
+  currency: string;
   /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
   repo?: BudgetRepository;
   /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
@@ -125,6 +127,7 @@ export function useSessionLifecycle<TOpts extends SessionLifecycleOptions>(
         budgetPath: o.budgetPath,
         mcpServerPath: o.mcpServerPath,
         systemPrompt,
+        currency: o.currency,
         onEvent: handleStreamEvent,
         onExit: handleExit,
         repo: o.repo,

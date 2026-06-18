@@ -16,7 +16,7 @@ import {
   buildContext,
   formatAttachments,
   isImageAttachment,
-  SYSTEM_PROMPT,
+  buildSystemPrompt,
   MUTATION_TOOL_NAMES,
   START_IMPORT_TOOL_NAME,
   type BudgetSnapshot,
@@ -32,6 +32,8 @@ export interface UseCapySessionOptions {
   budgetPath: string
   budgetName: string
   mcpServerPath: string
+  /** Budget's display currency (ISO 4217), baked into the prompt + snapshot. */
+  currency: string
   customInstructions?: string
   /** Snapshot of the budget's current shape, attached to the first message
    *  of a session so Capy knows what it's working with without a tool call.
@@ -167,10 +169,11 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const ensureSession = useCallback(() => {
     if (!lifecycle.sessionRef.current) {
       const o = lifecycle.optsRef.current
+      const basePrompt = buildSystemPrompt(o.currency)
       const customInstructions = o.customInstructions?.trim()
       const systemPrompt = customInstructions
-        ? `${SYSTEM_PROMPT}\n\n## User instructions\n${customInstructions}`
-        : SYSTEM_PROMPT
+        ? `${basePrompt}\n\n## User instructions\n${customInstructions}`
+        : basePrompt
 
       lifecycle.createSession(systemPrompt)
     }
@@ -199,9 +202,9 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const anthropicModel = useIntelligenceStore((s) => s.config.anthropic.model)
   const openaiModel = useIntelligenceStore((s) => s.config.openai.model)
   const claudeCliModel = useIntelligenceStore((s) => s.config.claudeCli.model)
-  // Single "session signature" — any change to provider or the model
-  // for the active provider should rebuild the session.
-  const sessionSignature =
+  // Currency is baked into the system prompt + snapshot, so a switch must
+  // rebuild the session for Capy to reflect it — hence it joins the signature.
+  const providerSignature =
     provider === "anthropic"
       ? `anthropic:${anthropicModel}`
       : provider === "openai"
@@ -209,6 +212,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
         : provider === "claude-cli"
           ? `claude-cli:${claudeCliModel}`
           : (provider ?? "off") // null carries no model — stable string signature
+  const sessionSignature = `${providerSignature}:cur=${opts.currency}`
   const prevSignatureRef = useRef(sessionSignature)
   useEffect(() => {
     if (prevSignatureRef.current !== sessionSignature) {

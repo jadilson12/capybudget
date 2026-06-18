@@ -9,6 +9,7 @@ import { MerchantInput } from "@/components/budget/merchant-input";
 import { useAccounts, useCategories, useTransactions } from "@/hooks/use-budget-data";
 import type { Transaction, TransactionType, TransactionFormData } from "@capybudget/core";
 import { findCategoryForMerchant, resolveTransferPair, parseMoney, getToday, parseLocalDate, toDateString, formatDateLabel } from "@capybudget/core";
+import { useFormatMoney } from "@/contexts/currency-context";
 import { Minus, Plus, ArrowLeftRight, Check, CalendarDays } from "lucide-react";
 
 interface TransactionFormProps {
@@ -52,6 +53,7 @@ export function TransactionForm({
   onCancel,
   onDismiss,
 }: TransactionFormProps) {
+  const { symbol } = useFormatMoney();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
   const { data: allTransactions = [] } = useTransactions();
@@ -221,7 +223,13 @@ export function TransactionForm({
       {/* Amount + Date */}
       <div className="flex items-center gap-3">
         <div className="flex items-baseline gap-0.5 flex-1 min-w-0">
-          <span className={`text-2xl font-bold transition-colors ${colors.text}`}>$</span>
+          {/* Symbol sits before the amount even for symbol-after budgets: this
+              is a full-width entry field, so a trailing symbol would float far
+              from the left-aligned number. The display formatter still honors
+              position everywhere money is rendered read-only. */}
+          {symbol && (
+            <span className={`text-2xl font-bold transition-colors ${colors.text}`}>{symbol}</span>
+          )}
           <input
             ref={amountRef}
             type="text"

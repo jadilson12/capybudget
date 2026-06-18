@@ -49,6 +49,9 @@ export interface ToolContext {
   repo: BudgetRepository
   fileAdapter: FileAdapter
   budgetPath: string
+  /** Budget's display currency (ISO 4217). Tool-result money is formatted in
+   *  its default convention, not the user's UI overrides. */
+  currency: string
   /**
    * Attachments on the in-flight chat turn — the bytes `start_import` stages.
    * Threaded by the API adapters from the message that triggered the tool call;
@@ -77,14 +80,16 @@ type ToolHandler = (
 
 const HANDLERS: Record<string, ToolHandler> = {
   // Data
-  list_accounts: ({ repo }) => handleListAccounts(repo),
-  list_transactions: ({ repo }, args) => handleListTransactions(repo, args),
+  list_accounts: ({ repo, currency }) => handleListAccounts(repo, currency),
+  list_transactions: ({ repo, currency }, args) =>
+    handleListTransactions(repo, currency, args),
   search_transactions: ({ repo }, args) => handleSearchTransactions(repo, args),
   group_transactions: ({ repo }, args) => handleGroupTransactions(repo, args),
   list_categories: ({ repo }) => handleListCategories(repo),
 
   // Mutations
-  create_transaction: ({ repo }, args) => handleCreateTransaction(repo, args),
+  create_transaction: ({ repo, currency }, args) =>
+    handleCreateTransaction(repo, currency, args),
   update_transaction: ({ repo }, args) => handleUpdateTransaction(repo, args),
   delete_transactions: ({ repo }, args) => handleDeleteTransactions(repo, args),
   create_account: ({ repo }, args) => handleCreateAccount(repo, args),

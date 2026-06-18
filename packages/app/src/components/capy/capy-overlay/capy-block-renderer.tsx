@@ -1,4 +1,5 @@
 import { formatText } from "@/lib/format-text"
+import { useFormatMoney } from "@/contexts/currency-context"
 import type {
   BarChartBlock,
   ContentBlock,
@@ -51,10 +52,24 @@ export function BlockRenderer({
 /* ── Table ─────────────────────────────────────────────────────── */
 
 function TableView({ headers, rows }: Pick<TableBlock, "headers" | "rows">) {
+  const { symbol, symbolPosition } = useFormatMoney()
   // Tables can carry more columns than the chat panel is wide. Let the table
   // grow to its content width (min-w-full keeps narrow tables filling the
   // panel) and scroll the container horizontally rather than squeezing or
   // wrapping cells into an unreadable mess.
+
+  // Anchor sign-detection on a leading symbol only when the symbol actually
+  // leads (`before`); a trailing or absent symbol leaves the sign/digit first.
+  const sign = (cell: string): "expense" | "income" | null => {
+    if (symbol && symbolPosition === "before") {
+      if (cell.startsWith(`-${symbol}`)) return "expense"
+      if (cell.startsWith(symbol)) return "income"
+      return null
+    }
+    if (/^-\d/.test(cell)) return "expense"
+    if (/^\d/.test(cell)) return "income"
+    return null
+  }
   return (
     <div className="rounded-xl border border-border/30 overflow-x-auto capy-scroll">
       <table className="w-max min-w-full text-sm">
@@ -73,20 +88,23 @@ function TableView({ headers, rows }: Pick<TableBlock, "headers" | "rows">) {
         <tbody>
           {rows.map((row, i) => (
             <tr key={i} className="border-t border-border/20">
-              {row.map((cell, j) => (
-                <td
-                  key={j}
-                  className={`px-4 py-2.5 text-foreground/80 whitespace-nowrap ${
-                    cell.startsWith("-$")
-                      ? "text-amount-expense font-medium tabular-nums"
-                      : cell.startsWith("$")
-                        ? "text-amount-income font-medium tabular-nums"
-                        : ""
-                  }`}
-                >
-                  {cell}
-                </td>
-              ))}
+              {row.map((cell, j) => {
+                const s = sign(cell)
+                return (
+                  <td
+                    key={j}
+                    className={`px-4 py-2.5 text-foreground/80 whitespace-nowrap ${
+                      s === "expense"
+                        ? "text-amount-expense font-medium tabular-nums"
+                        : s === "income"
+                          ? "text-amount-income font-medium tabular-nums"
+                          : ""
+                    }`}
+                  >
+                    {cell}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>

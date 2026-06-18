@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildContext, SYSTEM_PROMPT } from "./chat";
+import { buildContext, buildSystemPrompt } from "./chat";
 import { APP_KNOWLEDGE } from "./app-knowledge";
 import { APP_MAP } from "./app-map";
 import { SPECS, SPEC_FILENAMES } from "../specs.generated";
@@ -54,7 +54,9 @@ describe("buildContext", () => {
   });
 });
 
-describe("SYSTEM_PROMPT", () => {
+describe("buildSystemPrompt", () => {
+  const SYSTEM_PROMPT = buildSystemPrompt("USD");
+
   it("embeds the shared app-knowledge brief", () => {
     expect(SYSTEM_PROMPT).toContain(APP_KNOWLEDGE);
   });
@@ -88,5 +90,21 @@ describe("SYSTEM_PROMPT", () => {
 
   it("routes attached files through the start_import on-ramp, not direct inserts", () => {
     expect(SYSTEM_PROMPT).toContain("start_import");
+  });
+
+  it("formats the money examples in the budget's currency", () => {
+    expect(buildSystemPrompt("USD")).toContain("$12.50");
+    const eur = buildSystemPrompt("EUR");
+    expect(eur).toContain("€12.50");
+    expect(eur).toContain("The budget's currency is EUR");
+    expect(eur).not.toContain("$12.50");
+  });
+
+  it("uses the currency's default convention, not a user override", () => {
+    // RUB's default is zero-decimal with a trailing symbol — Capy formats in
+    // that convention, independent of any UI format the user picked.
+    const rub = buildSystemPrompt("RUB");
+    expect(rub).toContain("13 ₽"); // 1250 cents → 12.5 → 13 at 0 decimals, symbol after
+    expect(rub).not.toContain("₽12");
   });
 });

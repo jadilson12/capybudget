@@ -42,6 +42,7 @@ export interface StructuredImportSessionDeps {
     systemPrompt: string;
     repo: BudgetRepository;
     fileAdapter: FileAdapter;
+    currency: string;
   };
 }
 
@@ -74,6 +75,7 @@ export function createStructuredImportSession(
     onEvent: () => {},
     repo: options.repo,
     fileAdapter: options.fileAdapter,
+    currency: options.currency,
   });
 
   // The API adapters implement StructuredSession; verify the surface is

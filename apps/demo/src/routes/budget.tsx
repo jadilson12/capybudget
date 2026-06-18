@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createFileRoute, Navigate, Outlet, redirect } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { RepositoryProvider } from "@/contexts/repository-context";
+import { CurrencyProvider } from "@/components/budget/currency-provider";
 import { CapySessionProvider } from "@/components/capy/capy-session-provider";
 import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { invalidateAfterCapyMutation } from "@/components/budget/capy-invalidation";
 import { useIntelligenceStore } from "@/stores/intelligence-store";
 import { budgetKeys } from "@/hooks/use-budget-data";
 import { createInMemoryRepository } from "@capybudget/persistence";
+import { DEFAULT_CURRENCY } from "@capybudget/core";
 import { PROFILES } from "../data/profiles";
 import { generateScenarioData } from "../data/generator";
 import { seedFromString } from "../data/rng";
@@ -93,6 +95,7 @@ function DemoBudgetLayout() {
       budgetName: name,
       mcpServerPath: "packages/mcp/src/server.ts",
       customInstructions: customInstructions.instructions,
+      currency: DEFAULT_CURRENCY,
       onDataChanged,
       repo: repo ?? undefined,
     }),
@@ -103,11 +106,15 @@ function DemoBudgetLayout() {
     return <Navigate to="/" />;
   }
 
+  // profileId stands in for budgetPath: the in-memory budget.json key the
+  // Settings currency picker writes through, so a switch reformats demo amounts live.
   return (
     <RepositoryProvider key={profileId} value={repo}>
-      <CapySessionProvider key={profileId} options={sessionOptions}>
-        {seeded ? <Outlet /> : <DemoSeedingScreen name={name} onDone={markSeeded} />}
-      </CapySessionProvider>
+      <CurrencyProvider budgetPath={profileId}>
+        <CapySessionProvider key={profileId} options={sessionOptions}>
+          {seeded ? <Outlet /> : <DemoSeedingScreen name={name} onDone={markSeeded} />}
+        </CapySessionProvider>
+      </CurrencyProvider>
     </RepositoryProvider>
   );
 }

@@ -1,14 +1,14 @@
 import { exists, readTextFile, writeTextFile, readDir } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import type { BudgetMeta, Category } from "@capybudget/core";
-import { DEFAULT_CATEGORIES } from "@capybudget/core";
+import { DEFAULT_CATEGORIES, DEFAULT_CURRENCY, formatDefaultsFor } from "@capybudget/core";
+import { withFormatDefaults, migrateBudgetFolder } from "./budget-migrations";
 import {
   unparseCsv,
   ACCOUNT_COLUMNS,
   CATEGORY_COLUMNS,
   TRANSACTION_COLUMNS,
 } from "@capybudget/persistence";
-import { migrateBudgetFolder } from "./budget-migrations";
 
 export const SCHEMA_VERSION = 3;
 const BUDGET_FILE = "budget.json";
@@ -69,7 +69,7 @@ export async function detectBudget(folderPath: string): Promise<BudgetMeta | nul
     return migrated;
   }
 
-  return meta;
+  return withFormatDefaults({ ...meta, currency: meta.currency ?? DEFAULT_CURRENCY });
 }
 
 const PROTECTED_FILES = ["budget.json", "categories.csv", "accounts.csv", "transactions.csv"];
@@ -77,7 +77,11 @@ const PROTECTED_FILES = ["budget.json", "categories.csv", "accounts.csv", "trans
 /** Bootstrap a new budget in a folder the caller has already validated as
  *  empty (via inspectFolder). The PROTECTED_FILES guard below is defensive
  *  — it catches races and any future caller that skips inspection. */
-export async function bootstrapBudget(folderPath: string, name: string): Promise<BudgetMeta> {
+export async function bootstrapBudget(
+  folderPath: string,
+  name: string,
+  currency: string = DEFAULT_CURRENCY,
+): Promise<BudgetMeta> {
   for (const file of PROTECTED_FILES) {
     const filePath = await join(folderPath, file);
     if (await exists(filePath)) {
@@ -86,10 +90,13 @@ export async function bootstrapBudget(folderPath: string, name: string): Promise
   }
 
   const now = new Date().toISOString();
+  const defaults = formatDefaultsFor(currency);
   const meta: BudgetMeta = {
     schemaVersion: SCHEMA_VERSION,
     name,
-    currency: "USD",
+    currency,
+    currencyDecimals: defaults.decimals,
+    currencySymbolPosition: defaults.symbolPosition,
     createdAt: now,
     lastModified: now,
   };

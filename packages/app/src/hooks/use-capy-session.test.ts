@@ -68,6 +68,7 @@ const baseOpts = {
   budgetPath: "/budget",
   budgetName: "personal",
   mcpServerPath: "mcp/server.js",
+  currency: "USD",
 }
 
 beforeEach(() => {
@@ -235,6 +236,32 @@ describe("useCapySession session teardown", () => {
       useIntelligenceStore.getState().setOpenAiModel("gpt-5-pro")
     })
     expect(firstSession.killSpy).not.toHaveBeenCalled()
+  })
+
+  it("kills the session when the budget currency changes", () => {
+    useIntelligenceStore.setState({
+      hydrated: true,
+      config: {
+        ...DEFAULT_INTELLIGENCE_CONFIG,
+        provider: "anthropic",
+        anthropic: { apiKey: "sk-x", model: "claude-sonnet-4-6" },
+      },
+    })
+
+    const { result, rerender } = renderHook((opts) => useCapySession(opts), {
+      initialProps: baseOpts,
+    })
+
+    act(() => {
+      result.current.sendMessage("hi")
+    })
+    expect(createdSessions).toHaveLength(1)
+    const firstSession = createdSessions[0]
+
+    // Currency is baked into the system prompt + snapshot, so a switch must
+    // rebuild the session.
+    rerender({ ...baseOpts, currency: "EUR" })
+    expect(firstSession.killSpy).toHaveBeenCalled()
   })
 
   it("kills the session when the provider goes to null", () => {

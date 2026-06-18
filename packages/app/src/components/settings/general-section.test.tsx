@@ -1,0 +1,67 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { cleanup, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import type { BudgetMeta } from "@capybudget/core"
+import { GeneralSection } from "./general-section"
+
+const setName = vi.fn()
+
+let meta: BudgetMeta
+
+vi.mock("@/hooks/use-budget-meta", () => ({
+  useBudgetMeta: () => ({
+    data: meta,
+    isLoading: false,
+    setName,
+    save: vi.fn(),
+  }),
+}))
+
+function metaWith(over: Partial<BudgetMeta> = {}): BudgetMeta {
+  return {
+    schemaVersion: 3,
+    name: "My Budget",
+    currency: "USD",
+    currencyDecimals: 2,
+    currencySymbolPosition: "before",
+    createdAt: "",
+    lastModified: "",
+    ...over,
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  meta = metaWith()
+})
+
+afterEach(cleanup)
+
+describe("GeneralSection", () => {
+  it("commits a rename on blur, not per keystroke", async () => {
+    const user = userEvent.setup()
+    render(<GeneralSection budgetPath="/b" />)
+
+    const input = screen.getByLabelText("Budget name")
+    await user.clear(input)
+    await user.type(input, "Travel")
+    expect(setName).not.toHaveBeenCalled()
+
+    await user.tab()
+    expect(setName).toHaveBeenCalledWith("Travel")
+  })
+
+  it("does not write when the name is unchanged or blank", async () => {
+    const user = userEvent.setup()
+    render(<GeneralSection budgetPath="/b" />)
+
+    const input = screen.getByLabelText("Budget name")
+    await user.click(input)
+    await user.tab()
+    expect(setName).not.toHaveBeenCalled()
+
+    await user.clear(input)
+    await user.tab()
+    expect(setName).not.toHaveBeenCalled()
+  })
+})

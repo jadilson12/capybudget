@@ -2,6 +2,19 @@ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import Papa from "papaparse";
 import type { BudgetMeta } from "@capybudget/core";
+import { resolveBudgetFormat } from "@capybudget/core";
+
+/** Backfill `currency` and the format fields from the currency's defaults for a
+ *  budget.json written before those fields existed. Idempotent. */
+export function withFormatDefaults(meta: BudgetMeta): BudgetMeta {
+  const { currency, decimals, symbolPosition } = resolveBudgetFormat(meta);
+  return {
+    ...meta,
+    currency,
+    currencyDecimals: decimals,
+    currencySymbolPosition: symbolPosition,
+  };
+}
 
 /** A migration transforms a budget folder from version `from` to `from + 1`.
  *  Migrations are pure-ish: they read and rewrite files in place, no other side
@@ -77,11 +90,11 @@ export async function migrateBudgetFolder(
     await migration(folderPath);
     version++;
   }
-  return {
+  return withFormatDefaults({
     ...meta,
     schemaVersion: targetVersion,
     lastModified: new Date().toISOString(),
-  };
+  });
 }
 
 function insertAfter(arr: string[], anchor: string, value: string): string[] {

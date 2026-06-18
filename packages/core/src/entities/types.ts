@@ -1,3 +1,5 @@
+import type { SymbolPosition } from "../utils/money";
+
 /** The comparison bases the Monthly Budget tab can average implicit targets
  *  over. Source of truth for both the `BudgetBasis` type and the runtime
  *  list the basis picker enumerates. */
@@ -29,6 +31,8 @@ export interface BudgetMeta {
   schemaVersion: number;
   name: string;
   currency: string;
+  currencyDecimals: number;
+  currencySymbolPosition: SymbolPosition;
   createdAt: string;
   lastModified: string;
 }

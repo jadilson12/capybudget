@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { createCsvRepository } from "@capybudget/persistence"
+import { DEFAULT_CURRENCY } from "@capybudget/core"
 import {
   getToolDefinitions,
   runTool,
@@ -19,14 +20,29 @@ if (!BUDGET_PATH) {
   throw new Error("BUDGET_PATH environment variable is required")
 }
 
+// ── Currency ─────────────────────────────────────────────────────
+
+async function readBudgetCurrency(budgetPath: string): Promise<string> {
+  try {
+    const metaPath = await nodeFileAdapter.join(budgetPath, "budget.json")
+    const text = await nodeFileAdapter.readFile(metaPath)
+    const raw = JSON.parse(text) as { currency?: string }
+    return raw.currency ?? DEFAULT_CURRENCY
+  } catch {
+    return DEFAULT_CURRENCY
+  }
+}
+
 // ── Repository + dispatch context ────────────────────────────────
 
 const repo = createCsvRepository(BUDGET_PATH, nodeFileAdapter, { immediate: true })
 
+const currency = await readBudgetCurrency(BUDGET_PATH)
 const dispatchCtx: ToolContext = {
   repo,
   fileAdapter: nodeFileAdapter,
   budgetPath: BUDGET_PATH,
+  currency,
 }
 
 // ── Server setup ─────────────────────────────────────────────────

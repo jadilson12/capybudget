@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { RepositoryProvider } from "@/contexts/repository-context";
+import { CurrencyProvider } from "@/components/budget/currency-provider";
 import { CapySessionProvider } from "@/components/capy/capy-session-provider";
 import { useCustomInstructions } from "@/hooks/use-custom-instructions";
 import { invalidateAfterCapyMutation } from "@/components/budget/capy-invalidation";
@@ -10,6 +11,7 @@ import { createCsvRepository } from "@capybudget/persistence";
 import type { DisposableRepository } from "@capybudget/persistence";
 import { tauriFileAdapter } from "../../../../src/adapters/tauri-file-adapter";
 import { budgetKeys, useBudgetSnapshot } from "@/hooks/use-budget-data";
+import { useBudgetMeta } from "@/hooks/use-budget-meta";
 import { useImportStore } from "@/stores/import-store";
 
 interface BudgetSearch {
@@ -44,7 +46,12 @@ function BudgetLayout() {
 
   const provider = useIntelligenceStore((s) => s.config.provider);
   const customInstructions = useCustomInstructions(path);
-  const getBudgetSnapshot = useBudgetSnapshot();
+  const { data: meta } = useBudgetMeta(path);
+  const currency = meta.currency;
+  // Live name comes from budget.json so a rename reflects without a reopen;
+  // fall back to the search param only while meta is still loading.
+  const budgetName = meta.name || name;
+  const getBudgetSnapshot = useBudgetSnapshot(currency);
 
   const onDataChanged = useCallback(() => {
     invalidateAfterCapyMutation({
@@ -61,29 +68,32 @@ function BudgetLayout() {
   const signalChatImport = useImportStore((s) => s.signalChatImport);
   const onImportStarted = useCallback(() => {
     signalChatImport();
-    void navigate({ to: "/budget/import", search: { path, name } });
-  }, [signalChatImport, navigate, path, name]);
+    void navigate({ to: "/budget/import", search: { path, name: budgetName } });
+  }, [signalChatImport, navigate, path, budgetName]);
 
   const sessionOptions = useMemo(
     () => ({
       budgetPath: path,
-      budgetName: name,
+      budgetName,
       mcpServerPath: "packages/mcp/src/server.ts",
       customInstructions: customInstructions.instructions,
       getBudgetSnapshot,
+      currency,
       onDataChanged,
       onImportStarted,
       repo,
       fileAdapter: tauriFileAdapter,
     }),
-    [path, name, customInstructions.instructions, getBudgetSnapshot, onDataChanged, onImportStarted, repo],
+    [path, budgetName, customInstructions.instructions, getBudgetSnapshot, currency, onDataChanged, onImportStarted, repo],
   );
 
   return (
     <RepositoryProvider key={path} value={repo}>
-      <CapySessionProvider key={path} options={sessionOptions}>
-        <Outlet />
-      </CapySessionProvider>
+      <CurrencyProvider budgetPath={path}>
+        <CapySessionProvider key={path} options={sessionOptions}>
+          <Outlet />
+        </CapySessionProvider>
+      </CurrencyProvider>
     </RepositoryProvider>
   );
 }
