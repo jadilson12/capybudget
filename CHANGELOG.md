@@ -9,7 +9,7 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.0.1 — 2026-06-17
 
 - **Updates** - In-app update check and install in Settings; the boot-time check is now a non-blocking toast instead of a native dialog.
 - **Capy** - Fixed the Claude Code provider dropping answer text, losing follow-up chips, and showing empty bubbles after Claude CLI 2.1.x stream changes; render tools now reject malformed payloads so the model self-corrects.
