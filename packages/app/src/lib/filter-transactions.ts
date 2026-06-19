@@ -1,5 +1,5 @@
 import type { Account, Category, Transaction, TransactionType } from "@capybudget/core";
-import { matchesTransaction } from "@capybudget/core";
+import { matchesTransaction, toDateString } from "@capybudget/core";
 import type { DateRangeValue } from "@/components/budget/date-range-picker";
 
 export interface TransactionFilterCriteria {
@@ -92,19 +92,19 @@ export function filterTransactions(
 
   if (filters.uncategorizedOnly) {
     const categoryIds = new Set(categories.map((c) => c.id));
-    result = result.filter((t) => isUncategorized(t, categoryIds));
+    result = result.filter((t) => t.type !== "transfer" && isUncategorized(t, categoryIds));
   }
 
   if (filters.noMerchantOnly) {
-    result = result.filter((t) => normalizeMerchant(t.merchant) === "");
+    result = result.filter((t) => t.type !== "transfer" && normalizeMerchant(t.merchant) === "");
   }
 
   if (filters.dateRange) {
-    const fromTime = filters.dateRange.from.getTime();
-    const toTime = filters.dateRange.to.getTime();
+    const fromDate = toDateString(filters.dateRange.from);
+    const toDate = toDateString(filters.dateRange.to);
     result = result.filter((t) => {
-      const time = new Date(t.datetime.slice(0, 10) + "T12:00:00").getTime();
-      return time >= fromTime && time <= toTime;
+      const txnDate = t.datetime.slice(0, 10);
+      return txnDate >= fromDate && txnDate <= toDate;
     });
   }
 

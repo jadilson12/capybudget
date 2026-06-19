@@ -51,11 +51,33 @@ describe("filterTransactions", () => {
   it("filters by date range", () => {
     const result = filterTransactions(
       txns,
-      { ...noFilter, dateRange: { from: new Date("2026-02-01"), to: new Date("2026-02-28T23:59:59.999Z") } },
+      { ...noFilter, dateRange: { from: new Date(2026, 1, 1), to: new Date(2026, 1, 28) } },
       accounts,
       categories,
     );
     expect(result).toHaveLength(2);
+    expect(result.map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("single-day selection returns that whole day (from === to, inclusive)", () => {
+    // The picker hands `from`/`to` as local-midnight Dates; t1 is stored at noon.
+    const feb10 = new Date(2026, 1, 10);
+    const result = filterTransactions(
+      txns,
+      { ...noFilter, dateRange: { from: feb10, to: feb10 } },
+      accounts,
+      categories,
+    );
+    expect(result.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("range is inclusive of both endpoint days", () => {
+    const result = filterTransactions(
+      txns,
+      { ...noFilter, dateRange: { from: new Date(2026, 1, 10), to: new Date(2026, 1, 15) } },
+      accounts,
+      categories,
+    );
     expect(result.map((t) => t.id)).toEqual(["t1", "t2"]);
   });
 
@@ -128,7 +150,7 @@ describe("filterTransactions", () => {
   it("combines multiple filters", () => {
     const result = filterTransactions(
       txns,
-      { search: "landlord", categoryId: "cat-2", dateRange: { from: new Date("2026-02-01"), to: new Date("2026-02-28T23:59:59.999Z") } },
+      { search: "landlord", categoryId: "cat-2", dateRange: { from: new Date(2026, 1, 1), to: new Date(2026, 1, 28) } },
       accounts,
       categories,
     );
@@ -190,25 +212,26 @@ describe("filterTransactions", () => {
     expect(result).toEqual(secondaryTxns);
   });
 
-  it("uncategorizedOnly matches empty and unknown category ids, excludes categorized", () => {
+  it("uncategorizedOnly matches empty and unknown category ids, excludes categorized and transfers", () => {
     const result = filterTransactions(secondaryTxns, { ...noFilter, uncategorizedOnly: true }, accounts, categories);
-    // x2 (empty), x3 (empty/transfer), x4 (unknown id) — not x1/x5 (real category)
-    expect(ids(result)).toEqual(["x2", "x3", "x4"]);
+    // x2 (empty), x4 (unknown id) — not x1/x5 (real category), not x3 (transfer)
+    expect(ids(result)).toEqual(["x2", "x4"]);
   });
 
-  it("noMerchantOnly matches empty and whitespace merchant only", () => {
+  it("noMerchantOnly matches empty and whitespace merchant only, excludes transfers", () => {
     const result = filterTransactions(secondaryTxns, { ...noFilter, noMerchantOnly: true }, accounts, categories);
-    // x3 (empty), x5 (whitespace) — not the named-merchant rows
-    expect(ids(result)).toEqual(["x3", "x5"]);
+    // x5 (whitespace) — not the named-merchant rows, not x3 (transfer)
+    expect(ids(result)).toEqual(["x5"]);
   });
 
-  it("does not auto-exclude transfers from secondary filters", () => {
-    // The transfer x3 is category-less and merchant-less, so it shows up under
-    // both show-only filters — they compose with type, not against it.
+  it("excludes transfers from both secondary filters", () => {
+    // The transfer x3 is category-less and merchant-less, but transfers are
+    // intentionally uncategorized/merchant-less, so they're noise here — both
+    // show-only filters exclude them.
     const uncategorized = filterTransactions(secondaryTxns, { ...noFilter, uncategorizedOnly: true }, accounts, categories);
     const noMerchant = filterTransactions(secondaryTxns, { ...noFilter, noMerchantOnly: true }, accounts, categories);
-    expect(ids(uncategorized)).toContain("x3");
-    expect(ids(noMerchant)).toContain("x3");
+    expect(ids(uncategorized)).not.toContain("x3");
+    expect(ids(noMerchant)).not.toContain("x3");
   });
 
   it("composes type with uncategorizedOnly (AND)", () => {
