@@ -14,6 +14,25 @@ export interface MergeOutput {
   aliases: ImportAliases;
   createdAccountIds: Record<string, string>; // sourceAccount → new accountId
   sourcesToCreate: string[];
+  /** Transfers that found no counterpart and were downgraded to income/expense. */
+  downgradedTransferCount: number;
+}
+
+/**
+ * Resolve an import row to its destination budget account id: a freshly created
+ * account wins, then an explicit non-`__create__` mapping, then the id the
+ * engine already grounded onto the row. Shared with the merge-summary preview so
+ * the two can never disagree on where a transaction lands.
+ */
+export function resolveAccountId(
+  t: ImportTransaction,
+  createdAccountIds: Record<string, string>,
+  accountMapping: Record<string, string>,
+): string {
+  if (createdAccountIds[t.sourceAccount]) return createdAccountIds[t.sourceAccount];
+  const mapped = accountMapping[t.sourceAccount];
+  if (mapped && mapped !== "__create__") return mapped;
+  return t.accountId || "";
 }
 
 /**
@@ -97,12 +116,8 @@ export function prepareMerge(
   }
 
   // ── Resolve account ID per transaction ────────────────────
-  const resolveAccount = (t: ImportTransaction): string => {
-    if (createdAccountIds[t.sourceAccount]) return createdAccountIds[t.sourceAccount];
-    const mapped = accountMapping[t.sourceAccount];
-    if (mapped && mapped !== "__create__") return mapped;
-    return t.accountId || "";
-  };
+  const resolveAccount = (t: ImportTransaction): string =>
+    resolveAccountId(t, createdAccountIds, accountMapping);
 
   // ── Resolve target account for transfers ───────────────────
   const resolveTargetAccount = (t: ImportTransaction): string => {
@@ -159,21 +174,28 @@ export function prepareMerge(
   linkTransferPairs(newTxns);
 
   // ── Downgrade unpaired transfers to income/expense ─────────────
+  let downgradedTransferCount = 0;
   for (let i = 0; i < newTxns.length; i++) {
     const t = newTxns[i];
     if (t.type === "transfer" && !t.transferPairId) {
       newTxns[i] = { ...t, type: t.amount < 0 ? "expense" : "income" };
+      downgradedTransferCount += 1;
     }
   }
 
   const nextTransactions = [...prevTransactions, ...newTxns];
 
   // ── Build updated aliases ─────────────────────────────────
+  // Only remember sources that actually merged a transaction — an alias means
+  // "rows from this source landed here", so a source whose rows were all
+  // deselected must not leak a mapping into the next import.
+  const mergedSources = new Set(selected.map((t) => t.sourceAccount).filter(Boolean));
   const aliases: ImportAliases = {
     accounts: { ...existingAliases.accounts },
   };
 
   for (const [source, target] of Object.entries(accountMapping)) {
+    if (!mergedSources.has(source)) continue;
     if (target === "__create__" && createdAccountIds[source]) {
       aliases.accounts[source] = createdAccountIds[source];
     } else if (target && target !== "__create__") {
@@ -187,5 +209,6 @@ export function prepareMerge(
     aliases,
     createdAccountIds,
     sourcesToCreate,
+    downgradedTransferCount,
   };
 }

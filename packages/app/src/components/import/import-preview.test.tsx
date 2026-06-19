@@ -12,8 +12,31 @@ vi.mock("./import-table", () => ({
     <button onClick={onOpenAccountMapping}>open account mapping</button>
   ),
 }));
+// The mapping rows are the reused element — both dialogs render the same
+// component (source → target only). The stub surfaces what the preview wires
+// into it: the source rows and a remap button that calls back so an
+// edit-at-the-gate is observable.
 vi.mock("./import-mapping", () => ({
-  ImportMappingRows: () => <div data-testid="mapping-rows" />,
+  ImportMappingRows: ({
+    sourceAccounts,
+    accountMapping,
+    onAccountMappingChange,
+  }: {
+    sourceAccounts: string[];
+    accountMapping: Record<string, string>;
+    onAccountMappingChange: (m: Record<string, string>) => void;
+  }) => (
+    <div data-testid="mapping-rows">
+      {sourceAccounts.map((s) => (
+        <div key={s}>
+          <span>{s}</span>
+          <button onClick={() => onAccountMappingChange({ ...accountMapping, [s]: "acct-2" })}>
+            remap {s}
+          </button>
+        </div>
+      ))}
+    </div>
+  ),
 }));
 
 const { merge, flushWriteBack, dataReturn } = vi.hoisted(() => ({
@@ -24,8 +47,22 @@ const { merge, flushWriteBack, dataReturn } = vi.hoisted(() => ({
 
 vi.mock("@/hooks/use-import-merge", () => ({ useImportMerge: () => ({ merge }) }));
 vi.mock("@/hooks/use-import-data", () => ({ useImportData: () => dataReturn }));
+vi.mock("@/hooks/use-budget-data", () => ({ useTransactions: () => ({ data: [] }) }));
 
 import { ImportPreview } from "./import-preview";
+import type { Account } from "@capybudget/core";
+
+function makeBudgetAccount(overrides: Partial<Account> & { id: string }): Account {
+  return {
+    name: "Account",
+    type: "checking",
+    archived: false,
+    excludeFromNetWorth: false,
+    sortOrder: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 const TXN: ImportTransaction = {
   id: "imp-1",
@@ -176,15 +213,120 @@ describe("ImportPreview — account mapping dialog", () => {
     expect(within(dialog).getByTestId("mapping-rows")).toBeInTheDocument();
   });
 
-  it("keeps the merge dialog confirmation-only — no mapping rows", async () => {
-    Object.assign(dataReturn, { sourceAccounts: ["BOFA CHK 1234"] });
+  it("renders editable mapping rows in the confirmation", async () => {
+    const mapped: ImportTransaction = {
+      ...TXN,
+      id: "imp-2",
+      amount: -2500,
+      sourceAccount: "BOFA CHK 1234",
+      accountId: "acct-1",
+    };
+    Object.assign(dataReturn, {
+      transactions: [mapped],
+      selectedIds: new Set(["imp-2"]),
+      sourceAccounts: ["BOFA CHK 1234"],
+      accountMapping: { "BOFA CHK 1234": "acct-1" },
+      accounts: [makeBudgetAccount({ id: "acct-1", name: "BofA Checking" })],
+    });
     renderPreview();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Merge" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByTestId("mapping-rows")).toBeNull();
+    const rows = within(dialog).getByTestId("mapping-rows");
+    expect(within(rows).getByText("BOFA CHK 1234")).toBeInTheDocument();
+  });
+
+  it("hides source accounts whose rows are all deselected", async () => {
+    // The gate must reflect what merges (selectedIds), not every staged source.
+    Object.assign(dataReturn, {
+      transactions: [
+        { ...TXN, id: "imp-a", sourceAccount: "Chase", accountId: "acct-1" },
+        { ...TXN, id: "imp-b", sourceAccount: "Wells Fargo", accountId: "acct-2" },
+      ],
+      selectedIds: new Set(["imp-a"]),
+      sourceAccounts: ["Chase", "Wells Fargo"],
+      accountMapping: { "Chase": "acct-1", "Wells Fargo": "acct-2" },
+      accounts: [
+        makeBudgetAccount({ id: "acct-1", name: "Chase Checking" }),
+        makeBudgetAccount({ id: "acct-2", name: "Wells Savings" }),
+      ],
+    });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const rows = within(dialog).getByTestId("mapping-rows");
+    expect(within(rows).getByText("Chase")).toBeInTheDocument();
+    expect(within(rows).queryByText("Wells Fargo")).toBeNull();
+  });
+
+  it("shows only the total amount in the confirmation subtitle", async () => {
+    Object.assign(dataReturn, {
+      transactions: [{ ...TXN, id: "imp-2", amount: -2500 }],
+      selectedIds: new Set(["imp-2"]),
+    });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // Amount only — the count lives in the title, no new-accounts sentence.
+    expect(within(dialog).getByText(/This will add/)).toHaveTextContent(
+      "This will add -$25.00 to your budget.",
+    );
+  });
+
+  it("editing a mapping at the gate calls the mapping-change handler", async () => {
+    const handleAccountMappingChange = vi.fn();
+    Object.assign(dataReturn, {
+      transactions: [{ ...TXN, id: "imp-2", sourceAccount: "BOFA CHK 1234", accountId: "acct-1" }],
+      selectedIds: new Set(["imp-2"]),
+      sourceAccounts: ["BOFA CHK 1234"],
+      accountMapping: { "BOFA CHK 1234": "acct-1" },
+      accounts: [makeBudgetAccount({ id: "acct-1", name: "BofA Checking" })],
+      handleAccountMappingChange,
+    });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "remap BOFA CHK 1234" }));
+
+    expect(handleAccountMappingChange).toHaveBeenCalledWith({ "BOFA CHK 1234": "acct-2" });
+  });
+
+  it("warns about transfers that lost their counterpart, without listing them", async () => {
+    // A lone transfer with no target and no opposite leg downgrades on merge.
+    const orphan: ImportTransaction = {
+      ...TXN,
+      id: "imp-3",
+      type: "transfer",
+      amount: -5000,
+      sourceAccount: "BOFA CHK 1234",
+      accountId: "acct-1",
+      categoryId: "",
+    };
+    Object.assign(dataReturn, {
+      transactions: [orphan],
+      selectedIds: new Set(["imp-3"]),
+      sourceAccounts: ["BOFA CHK 1234"],
+      accountMapping: { "BOFA CHK 1234": "acct-1" },
+      accounts: [makeBudgetAccount({ id: "acct-1", name: "BofA Checking" })],
+    });
+    renderPreview();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/had no matching counterpart/)).toBeInTheDocument();
   });
 });
 

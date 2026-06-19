@@ -158,7 +158,11 @@ export {
 
 // Import merge operations
 export type { MergeInput, MergeOutput } from "./import/import-merge";
-export { prepareMerge } from "./import/import-merge";
+export { prepareMerge, resolveAccountId } from "./import/import-merge";
+
+// Import merge summary (preview of a pending merge)
+export type { MergeSummary } from "./import/import-merge-summary";
+export { summarizeMerge } from "./import/import-merge-summary";
 
 // Import validation
 export type { ValidationResult } from "./import/import-validation";
