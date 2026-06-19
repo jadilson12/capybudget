@@ -9,11 +9,14 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.1.0 — 2026-06-18
 
+- **Currency** - Configurable display currency (Settings + new-budget picker), 48 currencies; display-only, no conversion.
 - **Import** - Merge confirmation lets you fix account mappings in place and warns when transfers lost their counterpart, so a wrong mapping is visible and correctable before you commit.
-- **Transaction filters** - Type multiselect + uncategorized/no-merchant filters behind a toolbar popover.
-- **Currency** - Configurable display currency (Settings + new-budget picker); display-only, no conversion.
+- **Import** - Clearer drop-zone upload guidance with a rerun tip; every toast now has a dismiss button.
+- **Transactions** - Type multiselect + uncategorized/no-merchant filters behind a toolbar popover; single-day selection is inclusive and transfers no longer pollute those two filters.
+- **Analytics** - Net Worth chart anchors its Y-axis to a $0 baseline so values read against their real reference.
+- **App** - Remembers window size and position across launches.
 
 ## 1.0.1 — 2026-06-17
 
