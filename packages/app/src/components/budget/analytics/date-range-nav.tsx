@@ -8,6 +8,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useLocale, useTranslation } from "@capybudget/i18n";
 import type { DateRange } from "@capybudget/core";
 import type { PeriodType } from "@/stores/analytics-store";
 import type { DateRange as CalendarDateRange } from "react-day-picker";
@@ -26,14 +27,6 @@ interface DateRangeNavProps {
   dataBounds?: DateRange | null;
 }
 
-const PERIOD_LABELS: Record<PeriodType, string> = {
-  month: "Month",
-  quarter: "Quarter",
-  year: "Year",
-  allTime: "All Time",
-  custom: "Custom",
-};
-
 export function DateRangeNav({
   periodType,
   dateRange,
@@ -46,7 +39,9 @@ export function DateRangeNav({
   onCustomRange,
   dataBounds,
 }: DateRangeNavProps) {
-  const label = formatRangeLabel(dateRange, periodType);
+  const locale = useLocale();
+  const { t } = useTranslation("analytics");
+  const label = formatRangeLabel(dateRange, periodType, locale, t);
 
   const calendarDisabled = useMemo(() => {
     if (!dataBounds) return undefined;
@@ -96,7 +91,7 @@ export function DateRangeNav({
             size="icon-sm"
             onClick={onBack}
             disabled={!canGoBack}
-            aria-label="Previous period"
+            aria-label={t("period.previousPeriod")}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
@@ -110,7 +105,7 @@ export function DateRangeNav({
             size="icon-sm"
             onClick={onForward}
             disabled={!canGoForward}
-            aria-label="Next period"
+            aria-label={t("period.nextPeriod")}
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
@@ -122,7 +117,7 @@ export function DateRangeNav({
        *  shape. In the single-pill case the lone pill always shows as active
        *  and clicking it is a no-op since it's already selected. */}
       <div className="flex items-center bg-muted rounded-lg p-0.5 gap-0.5">
-        {allowedPeriods.filter((t) => t !== "custom").map((type) => (
+        {allowedPeriods.filter((p) => p !== "custom").map((type) => (
           <button
             key={type}
             type="button"
@@ -133,7 +128,7 @@ export function DateRangeNav({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {PERIOD_LABELS[type]}
+            {t(`period.${type}`)}
           </button>
         ))}
         {allowedPeriods.includes("custom") && (
@@ -150,7 +145,7 @@ export function DateRangeNav({
                 />
               }
             >
-              {PERIOD_LABELS.custom}
+              {t("period.custom")}
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="end">
               <Calendar
@@ -167,7 +162,7 @@ export function DateRangeNav({
                   disabled={!calendarRange?.from || !calendarRange?.to}
                   onClick={handleCalendarApply}
                 >
-                  Apply
+                  {t("period.apply")}
                 </Button>
               </div>
             </PopoverContent>

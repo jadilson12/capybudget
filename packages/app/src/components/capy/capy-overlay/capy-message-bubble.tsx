@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, ExternalLink, Loader2 } from "lucide-react"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
+import { useTranslation } from "@capybudget/i18n"
 import { getToolLabel } from "@/lib/tool-labels"
 import { billingCtaUrl } from "@/lib/billing-cta"
 import type {
@@ -137,6 +138,7 @@ function ToolGroupCard({
   blocks: ToolActivityBlock[]
   inProgress: boolean
 }) {
+  const { t } = useTranslation("capy")
   return (
     <div className="rounded-xl bg-muted/40 px-3.5 py-2.5">
       <div className="flex flex-col gap-1.5">
@@ -153,7 +155,7 @@ function ToolGroupCard({
               ) : (
                 <Check className="h-3.5 w-3.5 shrink-0 text-brand/80" />
               )}
-              <span>{getToolLabel(block.tool)}</span>
+              <span>{getToolLabel(block.tool, t)}</span>
             </div>
           )
         })}
@@ -194,6 +196,7 @@ function FollowupChips({
 /* ── Error bubble ─────────────────────────────────────────────── */
 
 function ErrorBubble({ block }: { block: ErrorBlock }) {
+  const { t } = useTranslation("capy")
   const ctaUrl = billingCtaUrl(block)
   return (
     <div className="flex justify-start">
@@ -212,7 +215,7 @@ function ErrorBubble({ block }: { block: ErrorBlock }) {
             }}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive/90 underline-offset-4 hover:underline"
           >
-            Open billing page
+            {t("error.openBilling")}
             <ExternalLink className="h-3 w-3" />
           </button>
         )}

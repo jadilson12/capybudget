@@ -14,18 +14,20 @@ import {
   getCategoryTrends,
 } from "@capybudget/core";
 import type { Category, DateRange, Transaction } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
+import { useGroupDisplayName } from "@/lib/display-names";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChartSwitcher } from "./chart-switcher";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_DATA_YET } from "./empty-copy";
 import { TransactionsModal } from "@/components/budget/transactions-modal";
 import { formatCountAndTotal } from "./format-range";
+import { useCategorySeriesLabel, useMonthLabel, useWeekLabel } from "./use-analytics-labels";
 import {
-  bucketWindow,
+  buildCompareChartRows,
   filterForCompareDrilldown,
   resolveClickedRow,
-  type CompareChartRow,
+  seriesKeyFor,
   type CompareDrilldown,
   type CompareViewMode,
 } from "./compare-drilldown";
@@ -53,11 +55,6 @@ const STORAGE_KEY_PREFIX = "capybudget:compare-selected-";
 
 type ViewMode = CompareViewMode;
 
-const VIEW_OPTIONS: Array<{ value: ViewMode; label: string }> = [
-  { value: "expense", label: "Expenses" },
-  { value: "income", label: "Income" },
-];
-
 interface CategoryRow {
   /** "" represents Uncategorized; we use a distinct internal key in selection state. */
   id: string;
@@ -81,10 +78,11 @@ function CompareTooltipContent({
   label,
 }: {
   active?: boolean;
-  payload?: Array<{ dataKey: string; value: number; color: string }>;
+  // `name` is the localized label to show; `dataKey` is the `cat:<id>` join key.
+  payload?: Array<{ dataKey: string; name: string; value: number; color: string }>;
   label?: string;
 }) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border bg-background px-3 py-2 shadow-popover space-y-1">
@@ -95,9 +93,9 @@ function CompareTooltipContent({
             className="h-2 w-2 rounded-full shrink-0"
             style={{ backgroundColor: entry.color }}
           />
-          <span className="text-muted-foreground">{entry.dataKey}</span>
+          <span className="text-muted-foreground">{entry.name}</span>
           <span className="tabular-nums font-medium ml-auto">
-            {format(entry.value)}
+            {money(entry.value)}
           </span>
         </div>
       ))}
@@ -218,12 +216,18 @@ function withSlotsFor(state: PickState, keys: Iterable<string>): PickState {
  *  does NOT remount, which is the whole point of the Compare tab.
  *  See https://react.dev/learn/preserving-and-resetting-state#resetting-state-with-a-key */
 export function CompareTab(props: CompareTabProps) {
+  const { t } = useTranslation("analytics");
   const [viewMode, setViewMode] = useState<ViewMode>("expense");
+
+  const viewOptions: Array<{ value: ViewMode; label: string }> = [
+    { value: "expense", label: t("view.expenses") },
+    { value: "income", label: t("view.income") },
+  ];
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <ChartSwitcher options={VIEW_OPTIONS} value={viewMode} onChange={setViewMode} />
+        <ChartSwitcher options={viewOptions} value={viewMode} onChange={setViewMode} />
       </div>
       <CompareTabBody key={viewMode} {...props} viewMode={viewMode} />
     </div>
@@ -235,7 +239,12 @@ interface CompareTabBodyProps extends CompareTabProps {
 }
 
 function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyTransactions }: CompareTabBodyProps) {
-  const { format, formatCompact } = useFormatMoney();
+  const { money, moneyCompact } = useFormatters();
+  const { t } = useTranslation("analytics");
+  const categorySeriesLabel = useCategorySeriesLabel();
+  const groupDisplay = useGroupDisplayName();
+  const monthLabel = useMonthLabel();
+  const weekLabel = useWeekLabel();
   // Build category rows for current period + view mode.
   const rows = useMemo(
     () => buildCategoryRows(transactions, categories, dateRange, viewMode),
@@ -327,38 +336,26 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
   const periodHasData = rows.length > 0;
   const anySelected = selected.size > 0;
 
-  // Map series → color slot, handling Uncategorized's empty-string id.
   const seriesWithColor = useMemo(() => {
     return seriesData.series.map((s) => {
       const key = toSelectionKey(s.categoryId);
       const slot = pick.colorMap.get(key) ?? 0;
       return {
         ...s,
+        seriesKey: seriesKeyFor(s.categoryId),
+        displayName: categorySeriesLabel(s.categoryId, s.categoryName),
         color: CHART_LINE_COLORS[slot % CHART_LINE_COLORS.length],
       };
     });
-  }, [seriesData.series, pick.colorMap]);
+  }, [seriesData.series, pick.colorMap, categorySeriesLabel]);
 
-  // Chart data shape: { month, __start, __end, [categoryName]: cents, ... }.
-  // Each row carries its bucket's own transaction window so a click maps
-  // deterministically back to a date range. The `__`-prefixed keys never
-  // render as lines — only `seriesWithColor` keys do.
-  const chartData = useMemo(() => {
-    const nameById = new Map(seriesData.series.map((s) => [s.categoryId, s.categoryName]));
-    return seriesData.points.map((point): CompareChartRow => {
-      const win = bucketWindow(point.date, granularity, dateRange);
-      const row: CompareChartRow = {
-        month: point.month,
-        __start: win.start.toISOString(),
-        __end: win.end.toISOString(),
-      };
-      for (const [catId, amt] of Object.entries(point.byCategory)) {
-        const name = nameById.get(catId) ?? "Uncategorized";
-        row[name] = amt;
-      }
-      return row;
-    });
-  }, [seriesData, granularity, dateRange]);
+  const chartData = useMemo(
+    () =>
+      buildCompareChartRows(seriesData.points, granularity, dateRange, (isoDate) =>
+        granularity === "week" ? weekLabel(isoDate) : monthLabel(isoDate),
+      ),
+    [seriesData, granularity, dateRange, monthLabel, weekLabel],
+  );
 
   const [drilldown, setDrilldown] = useState<CompareDrilldown | null>(null);
 
@@ -380,7 +377,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
     const row = resolveClickedRow(chartData, s?.activeTooltipIndex, s?.activeLabel);
     if (!row) return;
     setDrilldown({
-      label: row.month,
+      label: row.monthLabel,
       range: { from: new Date(row.__start), to: new Date(row.__end) },
       categoryIds: selectedIdsForCore,
       mode: viewMode,
@@ -392,8 +389,8 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
       <EmptyState
         title={
           hasAnyTransactions
-            ? `No ${viewMode === "expense" ? "expenses" : "income"} in this period`
-            : NO_DATA_YET
+            ? t(viewMode === "expense" ? "compare.noExpenses" : "compare.noIncome")
+            : t("empty.noDataYet")
         }
       />
     );
@@ -405,7 +402,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
       <div className="w-full md:w-[30%] md:shrink-0 space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground font-medium uppercase tracking-wide">
-            Categories
+            {t("compare.categories")}
           </span>
           <div className="flex items-center gap-3">
             <button
@@ -413,14 +410,14 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
               onClick={selectAll}
               className="text-muted-foreground hover:text-foreground transition-colors"
             >
-              Select all
+              {t("compare.selectAll")}
             </button>
             <button
               type="button"
               onClick={clearAll}
               className="text-muted-foreground hover:text-foreground transition-colors"
             >
-              Clear
+              {t("compare.clear")}
             </button>
           </div>
         </div>
@@ -429,7 +426,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
           {grouped.map(({ group, rows: groupRowsList }) => (
             <div key={group} className="space-y-1">
               <div className="text-[11px] uppercase tracking-wider text-muted-foreground/80 font-medium pb-0.5 border-b border-border/50">
-                {group}
+                {group === "Uncategorized" ? t("fallback.uncategorized") : groupDisplay(group)}
               </div>
               <ul className="space-y-0.5">
                 {groupRowsList.map((row) => {
@@ -444,7 +441,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
                   // orientation but can't be selected — flat-zero lines only
                   // clutter the chart.
                   const isZero = row.total === 0;
-                  const noDataTip = `No ${viewMode === "expense" ? "expenses" : "income"} in this period`;
+                  const noDataTip = t(viewMode === "expense" ? "compare.noExpenses" : "compare.noIncome");
                   return (
                     <li key={key}>
                       <label
@@ -467,13 +464,13 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
                           checked={isChecked}
                           disabled={isZero}
                           onCheckedChange={() => toggle(key)}
-                          aria-label={`Toggle ${row.name}`}
+                          aria-label={t("compare.toggleAria", { name: categorySeriesLabel(row.id, row.name) })}
                         />
                         <span className="text-sm text-foreground truncate">
-                          {row.name}
+                          {categorySeriesLabel(row.id, row.name)}
                         </span>
                         <span className="text-xs text-muted-foreground tabular-nums text-right">
-                          {row.total > 0 ? format(row.total) : ""}
+                          {row.total > 0 ? money(row.total) : ""}
                         </span>
                       </label>
                     </li>
@@ -489,7 +486,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
       <div className="flex-1 min-w-0 w-full">
         {!anySelected ? (
           <p className="text-sm text-muted-foreground py-24 text-center">
-            Select categories to compare
+            {t("compare.selectPrompt")}
           </p>
         ) : (
           <ResponsiveContainer width="100%" height={400}>
@@ -501,12 +498,12 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
             >
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
               <XAxis
-                dataKey="month"
+                dataKey="monthLabel"
                 tick={{ fontSize: 12 }}
                 className="text-muted-foreground"
               />
               <YAxis
-                tickFormatter={(v: number) => formatCompact(v)}
+                tickFormatter={(v: number) => moneyCompact(v)}
                 tick={{ fontSize: 12 }}
                 className="text-muted-foreground"
                 width={65}
@@ -527,8 +524,9 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
               <Legend wrapperStyle={{ fontSize: "12px" }} />
               {seriesWithColor.map((s) => (
                 <Line
-                  key={s.categoryId || UNCATEGORIZED_KEY}
-                  dataKey={s.categoryName}
+                  key={s.seriesKey}
+                  dataKey={s.seriesKey}
+                  name={s.displayName}
                   type="monotone"
                   stroke={s.color}
                   strokeWidth={2}
@@ -555,7 +553,7 @@ function CompareTabBody({ transactions, categories, dateRange, viewMode, hasAnyT
         title={drilldown?.label ?? ""}
         // The bucket's date label is already the modal title, so the subtitle
         // is just count/total — no range label prefix.
-        subtitle={drilldown ? formatCountAndTotal(drilldownTransactions, format) : undefined}
+        subtitle={drilldown ? formatCountAndTotal(drilldownTransactions, money, t) : undefined}
       />
     </div>
   );

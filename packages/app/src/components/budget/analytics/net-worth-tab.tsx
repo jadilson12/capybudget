@@ -17,19 +17,14 @@ import {
   getNetWorthOverTime,
 } from "@capybudget/core";
 import type { Account, Transaction, DateRange } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
 import { ChartSwitcher } from "./chart-switcher";
 import { useThemeColors } from "./use-theme-colors";
 import { NetWorthAccountFilter } from "./net-worth-account-filter";
 import { computeIncludedIds } from "./net-worth-account-filter-utils";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_DATA_YET } from "./empty-copy";
 import { useAnalyticsStore } from "@/stores/analytics-store";
-
-const SHORT_MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
 
 // ── Tooltip ──
 
@@ -42,12 +37,12 @@ function NetWorthTooltipContent({
   payload?: Array<{ value: number }>;
   label?: string;
 }) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border bg-background px-3 py-2 shadow-popover">
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium tabular-nums">{format(payload[0].value)}</p>
+      <p className="text-sm font-medium tabular-nums">{money(payload[0].value)}</p>
     </div>
   );
 }
@@ -63,14 +58,15 @@ interface NetWorthTabProps {
 
 type ChartMode = "bar" | "area";
 
-const CHART_OPTIONS: Array<{ value: ChartMode; label: string }> = [
-  { value: "bar", label: "Bar" },
-  { value: "area", label: "Area" },
-];
-
 export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransactions }: NetWorthTabProps) {
-  const { format, formatCompact } = useFormatMoney();
+  const { money, moneyCompact, monthShort } = useFormatters();
+  const { t } = useTranslation("analytics");
   const [chartMode, setChartMode] = useState<ChartMode>("bar");
+
+  const chartOptions: Array<{ value: ChartMode; label: string }> = [
+    { value: "bar", label: t("netWorth.bar") },
+    { value: "area", label: t("netWorth.area") },
+  ];
   const netWorthExcludedIds = useAnalyticsStore((s) => s.netWorthExcludedIds);
   const setNetWorthExcludedIds = useAnalyticsStore((s) => s.setNetWorthExcludedIds);
 
@@ -104,11 +100,14 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
       netWorthData.map((p) => {
         const d = new Date(p.date);
         return {
-          label: `${SHORT_MONTHS[d.getMonth()]} ${d.getFullYear()}`,
+          label: t("netWorth.monthLabel", {
+            month: monthShort(d),
+            year: d.getFullYear(),
+          }),
           netWorth: p.netWorth,
         };
       }),
-    [netWorthData],
+    [netWorthData, monthShort, t],
   );
 
   const yDomain = useMemo<[number | "auto", number | "auto"]>(() => {
@@ -136,7 +135,7 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
         excludedIds={netWorthExcludedIds}
         onChange={setNetWorthExcludedIds}
       />
-      <ChartSwitcher options={CHART_OPTIONS} value={chartMode} onChange={setChartMode} />
+      <ChartSwitcher options={chartOptions} value={chartMode} onChange={setChartMode} />
     </div>
   );
 
@@ -145,8 +144,8 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
       <div className="space-y-4">
         {header}
         <EmptyState
-          title="No accounts selected"
-          description="Select at least one account to chart your net worth."
+          title={t("netWorth.noAccountsTitle")}
+          description={t("netWorth.noAccountsDescription")}
         />
       </div>
     );
@@ -156,7 +155,7 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
     return (
       <div className="space-y-4">
         {header}
-        <EmptyState title={hasAnyTransactions ? "No data available" : NO_DATA_YET} />
+        <EmptyState title={hasAnyTransactions ? t("netWorth.noData") : t("empty.noDataYet")} />
       </div>
     );
   }
@@ -172,7 +171,7 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
               style={{ backgroundColor: brandColor }}
             />
             <p className="text-lg font-semibold tabular-nums">
-              {format(chartData[0].netWorth)}
+              {money(chartData[0].netWorth)}
             </p>
             <p className="text-xs text-muted-foreground">{chartData[0].label}</p>
           </div>
@@ -196,7 +195,7 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
             />
             <YAxis
               domain={yDomain}
-              tickFormatter={(v: number) => formatCompact(v)}
+              tickFormatter={(v: number) => moneyCompact(v)}
               tick={{ fontSize: 12 }}
               className="text-muted-foreground"
               width={65}
@@ -229,7 +228,7 @@ export function NetWorthTab({ accounts, transactions, dateRange, hasAnyTransacti
             />
             <YAxis
               domain={yDomain}
-              tickFormatter={(v: number) => formatCompact(v)}
+              tickFormatter={(v: number) => moneyCompact(v)}
               tick={{ fontSize: 12 }}
               className="text-muted-foreground"
               width={65}

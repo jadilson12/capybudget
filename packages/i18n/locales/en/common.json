@@ -1,0 +1,54 @@
+{
+  "nav": {
+    "accounts": "Accounts",
+    "budget": "Budget",
+    "import": "Import",
+    "settings": "Settings",
+    "help": "Help"
+  },
+  "language": {
+    "label": "Language"
+  },
+  "actions": {
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "add": "Add",
+    "archive": "Archive",
+    "unarchive": "Unarchive",
+    "edit": "Edit",
+    "remove": "Remove",
+    "close": "Close",
+    "back": "Back",
+    "reset": "Reset",
+    "confirm": "Confirm"
+  },
+  "theme": {
+    "light": "Light mode",
+    "dark": "Dark mode",
+    "system": "System theme",
+    "colorTheme": "Color theme"
+  },
+  "colorTheme": {
+    "capybara": "Capybara",
+    "ocean": "Ocean",
+    "forest": "Forest",
+    "rose": "Rose",
+    "slate": "Slate"
+  },
+  "update": {
+    "available": "Capy {{version}} available",
+    "action": "Update"
+  },
+  "dialog": {
+    "close": "Close"
+  },
+  "errors": {
+    "loadFailed": "Failed to load data"
+  },
+  "commandPalette": {
+    "title": "Command Palette",
+    "description": "Search for a command to run…"
+  }
+}

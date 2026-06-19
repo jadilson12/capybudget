@@ -1,18 +1,20 @@
 import { describe, it, expect } from "vitest";
-import type { Transaction } from "@capybudget/core";
+import type { Transaction, TrendPoint } from "@capybudget/core";
 import {
+  buildCompareChartRows,
   bucketWindow,
   filterForCompareDrilldown,
   resolveClickedRow,
+  seriesKeyFor,
   type CompareChartRow,
 } from "./compare-drilldown";
 import { makeTransaction } from "@/test/factories";
 
 describe("resolveClickedRow", () => {
   const rows: CompareChartRow[] = [
-    { month: "Jan 2024", __start: "2024-01-01T00:00:00.000Z", __end: "2024-02-01T00:00:00.000Z", Groceries: 1500 },
-    { month: "Feb 2024", __start: "2024-02-01T00:00:00.000Z", __end: "2024-03-01T00:00:00.000Z", Groceries: 1300 },
-    { month: "Mar 2024", __start: "2024-03-01T00:00:00.000Z", __end: "2024-04-01T00:00:00.000Z", Groceries: 900 },
+    { month: "Jan 2024", monthLabel: "Jan 2024", __start: "2024-01-01T00:00:00.000Z", __end: "2024-02-01T00:00:00.000Z", Groceries: 1500 },
+    { month: "Feb 2024", monthLabel: "Feb 2024", __start: "2024-02-01T00:00:00.000Z", __end: "2024-03-01T00:00:00.000Z", Groceries: 1300 },
+    { month: "Mar 2024", monthLabel: "Mar 2024", __start: "2024-03-01T00:00:00.000Z", __end: "2024-04-01T00:00:00.000Z", Groceries: 900 },
   ];
 
   // The shape a Recharts 3.8 LineChart wrapper onClick actually passes
@@ -57,6 +59,40 @@ describe("resolveClickedRow", () => {
     // 0, which must NOT silently select the first bucket on an empty click.
     expect(resolveClickedRow(rows, null, undefined)).toBeNull();
     expect(resolveClickedRow(rows, "", undefined)).toBeNull();
+  });
+});
+
+describe("buildCompareChartRows", () => {
+  const range = { start: new Date(2024, 0, 1), end: new Date(2024, 2, 1) };
+  const xLabel = (iso: string) => `label:${iso}`;
+
+  it("keys per-category amounts on the stable cat:<id> series key", () => {
+    const points: TrendPoint[] = [
+      {
+        date: new Date(2024, 0, 1).toISOString(),
+        month: "Jan 2024",
+        byCategory: { "cat-1": 1500, "cat-2": 900, "": 300 },
+      },
+    ];
+    const [row] = buildCompareChartRows(points, "month", range, xLabel);
+    expect(row[seriesKeyFor("cat-1")]).toBe(1500);
+    expect(row[seriesKeyFor("cat-2")]).toBe(900);
+    expect(row[seriesKeyFor("")]).toBe(300);
+    expect(row.monthLabel).toBe(`label:${points[0].date}`);
+  });
+
+  it("keeps two categories with identical display labels as distinct lines", () => {
+    const points: TrendPoint[] = [
+      {
+        date: new Date(2024, 0, 1).toISOString(),
+        month: "Jan 2024",
+        byCategory: { "cat-canonical": 1000, "cat-user-dup": 2000 },
+      },
+    ];
+    const [row] = buildCompareChartRows(points, "month", range, xLabel);
+    expect(row[seriesKeyFor("cat-canonical")]).toBe(1000);
+    expect(row[seriesKeyFor("cat-user-dup")]).toBe(2000);
+    expect(seriesKeyFor("cat-canonical")).not.toBe(seriesKeyFor("cat-user-dup"));
   });
 });
 

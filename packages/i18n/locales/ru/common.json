@@ -1,0 +1,54 @@
+{
+  "nav": {
+    "accounts": "Счета",
+    "budget": "Бюджет",
+    "import": "Импорт",
+    "settings": "Настройки",
+    "help": "Справка"
+  },
+  "language": {
+    "label": "Язык"
+  },
+  "actions": {
+    "save": "Сохранить",
+    "saving": "Сохранение…",
+    "cancel": "Отмена",
+    "delete": "Удалить",
+    "add": "Добавить",
+    "archive": "В архив",
+    "unarchive": "Из архива",
+    "edit": "Изменить",
+    "remove": "Убрать",
+    "close": "Закрыть",
+    "back": "Назад",
+    "reset": "Сбросить",
+    "confirm": "Подтвердить"
+  },
+  "theme": {
+    "light": "Светлая тема",
+    "dark": "Тёмная тема",
+    "system": "Системная тема",
+    "colorTheme": "Цветовая тема"
+  },
+  "colorTheme": {
+    "capybara": "Капибара",
+    "ocean": "Океан",
+    "forest": "Лес",
+    "rose": "Роза",
+    "slate": "Сланец"
+  },
+  "update": {
+    "available": "Доступна Capy {{version}}",
+    "action": "Обновить"
+  },
+  "dialog": {
+    "close": "Закрыть"
+  },
+  "errors": {
+    "loadFailed": "Не удалось загрузить данные"
+  },
+  "commandPalette": {
+    "title": "Командная палитра",
+    "description": "Найдите команду для запуска…"
+  }
+}

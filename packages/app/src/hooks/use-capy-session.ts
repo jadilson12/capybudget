@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useTranslation } from "@capybudget/i18n"
 import { useSessionLifecycle } from "@/hooks/use-session-lifecycle"
 import { mergeStreamContent } from "@/hooks/merge-stream-content"
 import { useIntelligenceStore } from "@/stores/intelligence-store"
@@ -34,6 +35,9 @@ export interface UseCapySessionOptions {
   mcpServerPath: string
   /** Budget's display currency (ISO 4217), baked into the prompt + snapshot. */
   currency: string
+  /** English name of the active UI language, baked into the prompt; joins the
+   *  session signature so a switch rebuilds. */
+  language?: string
   customInstructions?: string
   /** Snapshot of the budget's current shape, attached to the first message
    *  of a session so Capy knows what it's working with without a tool call.
@@ -64,6 +68,14 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const ackedToolCallsRef = useRef<Set<string>>(new Set())
   // Snapshot rides on the first message of each session only.
   const snapshotSentRef = useRef(false)
+
+  // Read through a ref: stable lifecycle callbacks don't re-create per render,
+  // so closing over `t` directly would go stale on a language switch.
+  const { t } = useTranslation("capy")
+  const tRef = useRef(t)
+  useEffect(() => {
+    tRef.current = t
+  })
 
   // Keep a ref to messages for use in sendMessage / stopStreaming without
   // stale closures.
@@ -157,8 +169,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
           blocks: [
             {
               type: "text",
-              content:
-                "Session ended unexpectedly. Send a message to start a new conversation.",
+              content: tRef.current("session.endedUnexpectedly"),
             },
           ],
         },
@@ -169,7 +180,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const ensureSession = useCallback(() => {
     if (!lifecycle.sessionRef.current) {
       const o = lifecycle.optsRef.current
-      const basePrompt = buildSystemPrompt(o.currency)
+      const basePrompt = buildSystemPrompt(o.currency, o.language)
       const customInstructions = o.customInstructions?.trim()
       const systemPrompt = customInstructions
         ? `${basePrompt}\n\n## User instructions\n${customInstructions}`
@@ -202,8 +213,6 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   const anthropicModel = useIntelligenceStore((s) => s.config.anthropic.model)
   const openaiModel = useIntelligenceStore((s) => s.config.openai.model)
   const claudeCliModel = useIntelligenceStore((s) => s.config.claudeCli.model)
-  // Currency is baked into the system prompt + snapshot, so a switch must
-  // rebuild the session for Capy to reflect it — hence it joins the signature.
   const providerSignature =
     provider === "anthropic"
       ? `anthropic:${anthropicModel}`
@@ -212,7 +221,9 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
         : provider === "claude-cli"
           ? `claude-cli:${claudeCliModel}`
           : (provider ?? "off") // null carries no model — stable string signature
-  const sessionSignature = `${providerSignature}:cur=${opts.currency}`
+  // Currency and language are baked into the prompt, so they join the signature:
+  // a switch changes it and rebuilds the session.
+  const sessionSignature = `${providerSignature}:cur=${opts.currency}:lng=${opts.language ?? "en"}`
   const prevSignatureRef = useRef(sessionSignature)
   useEffect(() => {
     if (prevSignatureRef.current !== sessionSignature) {
@@ -294,8 +305,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
         // Round 4 will replace this with a proper empty-state CTA.
         lifecycle.dispatchStreamEvent({
           type: "error",
-          message:
-            "Capy is not configured. Open settings to pick an AI provider.",
+          message: tRef.current("session.notConfigured"),
         })
         return
       }
@@ -305,7 +315,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       session.send(content, allFiles).catch((err) => {
         lifecycle.dispatchStreamEvent({
           type: "error",
-          message: err instanceof Error ? err.message : "Failed to send message",
+          message: err instanceof Error ? err.message : tRef.current("session.sendFailed"),
         })
       })
     },
@@ -323,7 +333,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     lifecycle.setIsStreaming(false)
 
     // Replace empty in-flight assistant bubble or append separator
-    const interruptBlock = { type: "text" as const, content: "Session interrupted. Send a message to continue." }
+    const interruptBlock = { type: "text" as const, content: tRef.current("session.interrupted") }
     setMessages((prev) => {
       const last = prev[prev.length - 1]
       if (last?.role === "assistant" && last.blocks.length === 0) {

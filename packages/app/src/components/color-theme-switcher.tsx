@@ -1,4 +1,5 @@
 import { Palette } from "lucide-react";
+import { useTranslation } from "@capybudget/i18n";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,20 +10,30 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useColorTheme } from "@/contexts/color-theme-context";
 import { COLOR_THEMES, type ColorTheme } from "@/lib/color-themes";
+import type { CommonKey } from "@/lib/i18n-keys";
 
 const entries = Object.entries(COLOR_THEMES) as [
   ColorTheme,
   (typeof COLOR_THEMES)[ColorTheme],
 ][];
 
+const LABEL_KEY = {
+  capybara: "colorTheme.capybara",
+  ocean: "colorTheme.ocean",
+  forest: "colorTheme.forest",
+  rose: "colorTheme.rose",
+  slate: "colorTheme.slate",
+} satisfies Record<ColorTheme, CommonKey>;
+
 export function ColorThemeSwitcher() {
+  const { t } = useTranslation("common");
   const { colorTheme, setColorTheme } = useColorTheme();
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Color theme" />
+          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={t("theme.colorTheme")} />
         }
       >
         <Palette className="h-4 w-4" />
@@ -32,13 +43,13 @@ export function ColorThemeSwitcher() {
           value={colorTheme}
           onValueChange={(v) => setColorTheme(v as ColorTheme)}
         >
-          {entries.map(([key, { label, swatch }]) => (
+          {entries.map(([key, { swatch }]) => (
             <DropdownMenuRadioItem key={key} value={key}>
               <span
                 className="inline-block h-3 w-3 rounded-full border border-foreground/15"
                 style={{ background: swatch }}
               />
-              {label}
+              {t(LABEL_KEY[key])}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

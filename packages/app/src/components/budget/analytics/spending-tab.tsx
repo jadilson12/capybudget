@@ -11,15 +11,16 @@ import {
   getIncomeByCategory,
 } from "@capybudget/core";
 import type { Transaction, Category, DateRange } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useLocale, useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
 import { ChartSwitcher } from "./chart-switcher";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_DATA_YET } from "./empty-copy";
 import { TransactionsModal } from "@/components/budget/transactions-modal";
 import { TransactionsDrilldownLink } from "@/components/budget/transactions-drilldown-link";
 import type { PeriodType } from "@/stores/analytics-store";
 import { formatDrilldownSubtitle } from "./format-range";
 import { getRechartsPayload } from "./recharts-payload";
+import { useCategorySeriesLabel } from "./use-analytics-labels";
 import {
   buildSliceDrilldown,
   filterForSliceDrilldown,
@@ -69,14 +70,14 @@ function PieTooltipContent({
   active?: boolean;
   payload?: Array<{ payload: { name: string; value: number; percentage: number } }>;
 }) {
-  const { format } = useFormatMoney();
+  const { money, percent } = useFormatters();
   if (!active || !payload?.length) return null;
   const data = payload[0].payload;
   return (
     <div className="rounded-lg border bg-background px-3 py-2 shadow-popover">
       <p className="text-sm font-medium">{data.name}</p>
       <p className="text-sm text-muted-foreground">
-        {format(data.value)} ({data.percentage.toFixed(1)}%)
+        {money(data.value)} ({percent(data.percentage)})
       </p>
     </div>
   );
@@ -94,11 +95,6 @@ interface SpendingTabProps {
 
 type ViewMode = SpendingViewMode;
 
-const VIEW_OPTIONS: Array<{ value: ViewMode; label: string }> = [
-  { value: "expenses", label: "Expenses" },
-  { value: "income", label: "Income" },
-];
-
 export function SpendingTab({
   transactions,
   categories,
@@ -106,8 +102,16 @@ export function SpendingTab({
   periodType,
   hasAnyTransactions,
 }: SpendingTabProps) {
-  const { format } = useFormatMoney();
+  const { money, percent } = useFormatters();
+  const locale = useLocale();
+  const { t } = useTranslation("analytics");
+  const categorySeriesLabel = useCategorySeriesLabel();
   const [viewMode, setViewMode] = useState<ViewMode>("expenses");
+
+  const viewOptions: Array<{ value: ViewMode; label: string }> = [
+    { value: "expenses", label: t("view.expenses") },
+    { value: "income", label: t("view.income") },
+  ];
   const [drilldown, setDrilldown] = useState<SliceDrilldown | null>(null);
 
   const spending = useMemo(
@@ -127,16 +131,16 @@ export function SpendingTab({
     () =>
       breakdown.map((s) => ({
         categoryId: s.categoryId,
-        name: s.categoryName,
+        name: categorySeriesLabel(s.categoryId, s.categoryName),
         value: s.total,
         percentage: s.percentage,
       })),
-    [breakdown],
+    [breakdown, categorySeriesLabel],
   );
 
   const emptyMessage = viewMode === "expenses"
-    ? "No expenses in this period"
-    : "No income in this period";
+    ? t("spending.noExpenses")
+    : t("spending.noIncome");
 
   // Pre-filtered transactions for the active drilldown — the same `type`
   // gating `breakdown` produces (expense or income), then by categoryId.
@@ -152,7 +156,7 @@ export function SpendingTab({
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <ChartSwitcher options={VIEW_OPTIONS} value={viewMode} onChange={setViewMode} />
+        <ChartSwitcher options={viewOptions} value={viewMode} onChange={setViewMode} />
       </div>
 
       {chartData.length > 0 ? (
@@ -201,20 +205,20 @@ export function SpendingTab({
                 <span className="tabular-nums text-sm font-medium text-foreground text-right pl-4">
                   <TransactionsDrilldownLink
                     onClick={() => handleSliceClick(entry)}
-                    ariaLabel={`View ${entry.name} transactions`}
+                    ariaLabel={t("a11y.viewTransactionsAria", { name: entry.name })}
                   >
-                    {format(entry.value)}
+                    {money(entry.value)}
                   </TransactionsDrilldownLink>
                 </span>
                 <span className="tabular-nums text-xs text-muted-foreground text-right">
-                  {entry.percentage.toFixed(1)}%
+                  {percent(entry.percentage)}
                 </span>
               </div>
             ))}
           </div>
         </div>
       ) : (
-        <EmptyState title={hasAnyTransactions ? emptyMessage : NO_DATA_YET} />
+        <EmptyState title={hasAnyTransactions ? emptyMessage : t("empty.noDataYet")} />
       )}
 
       <TransactionsModal
@@ -229,8 +233,8 @@ export function SpendingTab({
               }
             : {}
         }
-        title={drilldown?.categoryName ?? ""}
-        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, periodType, drilldownTransactions, format) : undefined}
+        title={drilldown ? categorySeriesLabel(drilldown.categoryId, drilldown.categoryName) : ""}
+        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, periodType, drilldownTransactions, money, locale, t) : undefined}
       />
     </div>
   );

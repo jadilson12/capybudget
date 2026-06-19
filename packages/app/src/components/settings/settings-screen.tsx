@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { ArrowLeft, Coins, RefreshCw, Shapes, Sparkles } from "lucide-react"
+import { useTranslation } from "@capybudget/i18n"
+import type { SettingsKey } from "@/lib/i18n-keys"
 import { Button } from "@/components/ui/button"
 import { GeneralSection } from "./general-section"
+import { LanguageSection } from "./language-section"
 import { CurrencySection } from "./currency-section"
 import { ProviderSection } from "./provider-section"
 import { ChatInstructionsSection } from "./chat-instructions-section"
@@ -15,35 +18,27 @@ type SettingsSection = "general" | "intelligence" | "categories" | "updates"
 
 const SECTIONS: {
   id: SettingsSection
-  label: string
-  description: string
   icon: React.ComponentType<{ className?: string }>
 }[] = [
-  {
-    id: "general",
-    label: "General",
-    description: "Currency & basics",
-    icon: Coins,
-  },
-  {
-    id: "intelligence",
-    label: "Intelligence",
-    description: "AI provider",
-    icon: Sparkles,
-  },
-  {
-    id: "categories",
-    label: "Categories",
-    description: "Organize spending",
-    icon: Shapes,
-  },
-  {
-    id: "updates",
-    label: "Updates",
-    description: "App version",
-    icon: RefreshCw,
-  },
+  { id: "general", icon: Coins },
+  { id: "intelligence", icon: Sparkles },
+  { id: "categories", icon: Shapes },
+  { id: "updates", icon: RefreshCw },
 ]
+
+const SECTION_LABEL_KEY = {
+  general: "sections.general.label",
+  intelligence: "sections.intelligence.label",
+  categories: "sections.categories.label",
+  updates: "sections.updates.label",
+} satisfies Record<SettingsSection, SettingsKey>
+
+const SECTION_DESCRIPTION_KEY = {
+  general: "sections.general.description",
+  intelligence: "sections.intelligence.description",
+  categories: "sections.categories.description",
+  updates: "sections.updates.description",
+} satisfies Record<SettingsSection, SettingsKey>
 
 const SECTION_IDS = new Set(SECTIONS.map((s) => s.id))
 
@@ -57,6 +52,7 @@ function resolveSection(section: string | undefined): SettingsSection {
 
 export function SettingsScreen() {
   const navigate = useNavigate()
+  const { t } = useTranslation("settings")
   const { path, name, section } = useSearch({ from: "/budget" })
   const [active, setActive] = useState<SettingsSection>(() => resolveSection(section))
 
@@ -94,7 +90,7 @@ export function SettingsScreen() {
     <div className="h-screen overflow-x-auto overflow-y-hidden">
     <div className="flex h-full min-w-[48rem]">
       <nav
-        aria-label="Settings sections"
+        aria-label={t("nav.label")}
         className="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar"
       >
         <div className="flex items-center gap-2 px-3 py-3">
@@ -102,18 +98,20 @@ export function SettingsScreen() {
             variant="ghost"
             size="icon"
             onClick={handleBack}
-            aria-label="Back to budget"
+            aria-label={t("back")}
             className="shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h2 className="text-base font-bold tracking-tight">Settings</h2>
+          <h2 className="text-base font-bold tracking-tight">{t("title")}</h2>
         </div>
         <div className="flex flex-col gap-0.5 px-2">
           {visibleSections.map((s) => (
             <SectionItem
               key={s.id}
-              {...s}
+              icon={s.icon}
+              label={t(SECTION_LABEL_KEY[s.id])}
+              description={t(SECTION_DESCRIPTION_KEY[s.id])}
               active={active === s.id}
               onSelect={() => setActive(s.id)}
             />
@@ -126,6 +124,7 @@ export function SettingsScreen() {
           {active === "general" && (
             <>
               <GeneralSection budgetPath={path} />
+              <LanguageSection />
               <CurrencySection budgetPath={path} />
             </>
           )}

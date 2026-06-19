@@ -10,7 +10,9 @@ import {
 } from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import type { Account } from "@capybudget/core";
-import { ACCOUNT_TYPE_LABELS, ACCOUNT_TYPE_ORDER } from "@capybudget/core";
+import { ACCOUNT_TYPE_ORDER } from "@capybudget/core";
+import { useTranslation } from "@capybudget/i18n";
+import { useAccountTypeLabel } from "@/lib/display-names";
 import { ChevronDown, X } from "lucide-react";
 
 interface AccountSelectorProps {
@@ -38,7 +40,7 @@ export function AccountSelector({
   accounts,
   value,
   onChange,
-  placeholder = "Select account…",
+  placeholder,
   includeAll = false,
   clearable = false,
   excludeIds = [],
@@ -47,6 +49,9 @@ export function AccountSelector({
   defaultOpen = false,
   onOpenChange: onOpenChangeProp,
 }: AccountSelectorProps) {
+  const { t } = useTranslation("budget");
+  const accountTypeLabel = useAccountTypeLabel();
+  const resolvedPlaceholder = placeholder ?? t("account.selector.placeholder");
   const [open, setOpen] = useState(defaultOpen);
   const handleOpenChange = (next: boolean) => { setOpen(next); onOpenChangeProp?.(next); };
 
@@ -60,8 +65,8 @@ export function AccountSelector({
 
   const selectedLabel =
     value === "" && includeAll
-      ? "All Accounts"
-      : accounts.find((a) => a.id === value)?.name ?? placeholder;
+      ? t("account.selector.all")
+      : accounts.find((a) => a.id === value)?.name ?? resolvedPlaceholder;
 
   const showClear = clearable && value !== "";
 
@@ -85,7 +90,7 @@ export function AccountSelector({
             type="button"
             onClick={() => onChange("")}
             className="flex h-8 items-center rounded-r-lg border border-input px-1.5 text-muted-foreground/60 hover:text-foreground transition-colors"
-            aria-label="Clear account filter"
+            aria-label={t("account.selector.clearFilter")}
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -93,9 +98,9 @@ export function AccountSelector({
       </div>
       <PopoverContent className="w-64 p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search accounts…" />
+          <CommandInput placeholder={t("account.selector.search")} />
           <CommandList>
-            <CommandEmpty>No accounts found.</CommandEmpty>
+            <CommandEmpty>{t("account.selector.empty")}</CommandEmpty>
             {includeUnset && (
               <CommandGroup>
                 <CommandItem
@@ -105,7 +110,7 @@ export function AccountSelector({
                     handleOpenChange(false);
                   }}
                 >
-                  <span className="text-muted-foreground italic">Unset</span>
+                  <span className="text-muted-foreground italic">{t("account.selector.unset")}</span>
                 </CommandItem>
               </CommandGroup>
             )}
@@ -119,12 +124,12 @@ export function AccountSelector({
                     handleOpenChange(false);
                   }}
                 >
-                  All Accounts
+                  {t("account.selector.all")}
                 </CommandItem>
               </CommandGroup>
             )}
             {groups.map((type) => (
-              <CommandGroup key={type} heading={ACCOUNT_TYPE_LABELS[type]}>
+              <CommandGroup key={type} heading={accountTypeLabel(type)}>
                 {active
                   .filter((a) => a.type === type)
                   .map((a) => {

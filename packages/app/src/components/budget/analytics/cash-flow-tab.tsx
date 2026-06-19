@@ -16,9 +16,10 @@ import {
   getCashFlow,
 } from "@capybudget/core";
 import type { Transaction, DateRange } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_DATA_YET } from "./empty-copy";
+import { useMonthLabel } from "./use-analytics-labels";
 
 // ── Tooltip ──
 
@@ -31,7 +32,8 @@ function CashFlowTooltipContent({
   payload?: Array<{ dataKey: string; value: number; color: string }>;
   label?: string;
 }) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
+  const { t } = useTranslation("analytics");
   if (!active || !payload?.length) return null;
 
   const income = payload.find((p) => p.dataKey === "income")?.value ?? 0;
@@ -42,13 +44,13 @@ function CashFlowTooltipContent({
     <div className="rounded-lg border bg-background px-3 py-2 shadow-popover space-y-1">
       <p className="text-sm font-medium">{label}</p>
       <p className="text-sm text-amount-income tabular-nums">
-        Income: {format(income)}
+        {t("cashFlow.incomeValue", { value: money(income) })}
       </p>
       <p className="text-sm text-amount-expense tabular-nums">
-        Expenses: {format(expenses)}
+        {t("cashFlow.expensesValue", { value: money(expenses) })}
       </p>
       <p className={`text-sm font-medium tabular-nums ${net >= 0 ? "text-amount-income" : "text-amount-expense"}`}>
-        Net: {net >= 0 ? "+" : ""}{format(Math.abs(net))}
+        {t("cashFlow.netValue", { value: `${net >= 0 ? "+" : ""}${money(Math.abs(net))}` })}
       </p>
     </div>
   );
@@ -63,10 +65,16 @@ interface CashFlowTabProps {
 }
 
 export function CashFlowTab({ transactions, dateRange, hasAnyTransactions }: CashFlowTabProps) {
-  const { formatCompact } = useFormatMoney();
+  const { moneyCompact } = useFormatters();
+  const { t } = useTranslation("analytics");
+  const monthLabel = useMonthLabel();
   const cashFlowData = useMemo(
-    () => getCashFlow(transactions, ensureMinMonths(dateRange, 12)),
-    [transactions, dateRange],
+    () =>
+      getCashFlow(transactions, ensureMinMonths(dateRange, 12)).map((p) => ({
+        ...p,
+        monthLabel: monthLabel(p.date),
+      })),
+    [transactions, dateRange, monthLabel],
   );
 
   const { incomeColor, expenseColor } = useThemeColors({
@@ -77,7 +85,7 @@ export function CashFlowTab({ transactions, dateRange, hasAnyTransactions }: Cas
   if (cashFlowData.length === 0) {
     return (
       <EmptyState
-        title={hasAnyTransactions ? "No cash flow data in this period" : NO_DATA_YET}
+        title={hasAnyTransactions ? t("cashFlow.empty") : t("empty.noDataYet")}
       />
     );
   }
@@ -87,12 +95,12 @@ export function CashFlowTab({ transactions, dateRange, hasAnyTransactions }: Cas
       <BarChart data={cashFlowData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
         <XAxis
-          dataKey="month"
+          dataKey="monthLabel"
           tick={{ fontSize: 12 }}
           className="text-muted-foreground"
         />
         <YAxis
-          tickFormatter={(v: number) => formatCompact(v)}
+          tickFormatter={(v: number) => moneyCompact(v)}
           tick={{ fontSize: 12 }}
           className="text-muted-foreground"
           width={65}
@@ -103,7 +111,7 @@ export function CashFlowTab({ transactions, dateRange, hasAnyTransactions }: Cas
         />
         <Bar
           dataKey="income"
-          name="Income"
+          name={t("summary.income")}
           fill={incomeColor}
           radius={[4, 4, 0, 0]}
         >
@@ -113,7 +121,7 @@ export function CashFlowTab({ transactions, dateRange, hasAnyTransactions }: Cas
         </Bar>
         <Bar
           dataKey="expenses"
-          name="Expenses"
+          name={t("summary.expenses")}
           fill={expenseColor}
           radius={[4, 4, 0, 0]}
         />

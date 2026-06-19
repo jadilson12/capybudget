@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import {
   ImportOrchestrator,
   FileStagingStore,
-  IMPORT_STRUCTURED_SYSTEM_PROMPT,
+  buildImportSystemPrompt,
   canImport,
   canReadPdf,
   createStructuredImportSession,
@@ -34,14 +34,15 @@ export interface RunOptions {
 }
 
 function composeSystemPrompt(opts?: RunOptions): string {
+  const base = buildImportSystemPrompt();
   const extra: string[] = [];
   if (opts?.accountName) {
     extra.push(`Default source account when a row has none: ${opts.accountName}.`);
   }
   const instructions = opts?.instructions?.trim();
   if (instructions) extra.push(instructions);
-  if (extra.length === 0) return IMPORT_STRUCTURED_SYSTEM_PROMPT;
-  return `${IMPORT_STRUCTURED_SYSTEM_PROMPT}\n\n## User instructions\n${extra.join("\n")}`;
+  if (extra.length === 0) return base;
+  return `${base}\n\n## User instructions\n${extra.join("\n")}`;
 }
 
 /**

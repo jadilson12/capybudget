@@ -36,8 +36,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ACCOUNT_TYPE_LABELS, getAccountBalance, getAccountsByGroup, getNetWorth, isOpeningBalanceTxn } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { getAccountBalance, getAccountsByGroup, getNetWorth, isOpeningBalanceTxn } from "@capybudget/core";
+import { useTranslation } from "@capybudget/i18n";
+import { useAccountTypeLabel } from "@/lib/display-names";
+import { useFormatters } from "@/hooks/use-formatters";
 import { useAccounts, useTransactions } from "@/hooks/use-budget-data";
 import { NetWorthFilter } from "./net-worth-filter";
 import {
@@ -62,7 +64,9 @@ export function Sidebar({
   onEditAccount,
   onReorderAccounts,
 }: SidebarProps) {
-  const { format, formatCompact } = useFormatMoney();
+  const { t } = useTranslation("budget");
+  const accountTypeLabel = useAccountTypeLabel();
+  const { money, moneyCompact } = useFormatters();
   const { data: accounts = [] } = useAccounts();
   const { data: transactions = [] } = useTransactions();
   const deleteAccount = useDeleteAccount();
@@ -106,19 +110,22 @@ export function Sidebar({
   function handleArchive(account: Account) {
     if (account.archived) {
       unarchiveAccount.mutate(account.id, {
-        onSuccess: () => toast.success(`${account.name} unarchived`),
+        onSuccess: () => toast.success(t("account.toast.unarchived", { name: account.name })),
       });
     } else {
       const balance = getAccountBalance(account.id, transactions);
       if (balance !== 0) {
         setErrorDialog({
-          title: "Cannot Archive Account",
-          description: `${account.name} still has a ${format(Math.abs(balance))} balance. Add a transaction to bring it to zero first — archived accounts are hidden from your budget.`,
+          title: t("account.cannotArchive.title"),
+          description: t("account.cannotArchive.description", {
+            name: account.name,
+            balance: money(Math.abs(balance)),
+          }),
         });
         return;
       }
       archiveAccount.mutate(account.id, {
-        onSuccess: () => toast.success(`${account.name} archived`),
+        onSuccess: () => toast.success(t("account.toast.archived", { name: account.name })),
       });
     }
   }
@@ -128,29 +135,29 @@ export function Sidebar({
     const hasRealTxns = accountTxns.some((t) => !isOpeningBalanceTxn(t));
     if (hasRealTxns) {
       setErrorDialog({
-        title: "Cannot Delete Account",
-        description: `${account.name} has transactions that would be lost. Delete or move them first, or archive the account instead.`,
+        title: t("account.cannotDelete.title"),
+        description: t("account.cannotDelete.description", { name: account.name }),
       });
       return;
     }
     deleteAccount.mutate(account.id, {
-      onSuccess: () => toast.success(`${account.name} deleted`),
+      onSuccess: () => toast.success(t("account.toast.deleted", { name: account.name })),
     });
   }
 
   return (
-    <aside aria-label="Accounts" className="relative flex w-72 h-full flex-col bg-sidebar shrink-0">
+    <aside aria-label={t("sidebar.label")} className="relative flex w-72 h-full flex-col bg-sidebar shrink-0">
       {/* Net Worth — warm hero area */}
       <div className="px-4 pt-4 pb-3">
         <div className="rounded-lg bg-brand-subtle px-3 py-3">
           <div className="flex items-center justify-between">
             <div className="text-xs font-medium text-brand/70 uppercase tracking-wider">
-              Net Worth
+              {t("sidebar.netWorth")}
             </div>
             <NetWorthFilter accounts={accounts} />
           </div>
           <div className="text-2xl font-bold tabular-nums text-brand mt-0.5">
-            {formatCompact(netWorth)}
+            {moneyCompact(netWorth)}
           </div>
         </div>
       </div>
@@ -168,7 +175,7 @@ export function Sidebar({
             }`}
           >
             <Layers className="h-4 w-4 text-brand" />
-            All Accounts
+            {t("sidebar.allAccounts")}
           </Link>
 
           {/* Account groups — sortable */}
@@ -191,11 +198,11 @@ export function Sidebar({
                 <div key={type} className="mt-5">
                   <div className="flex items-center justify-between pl-3 pr-9 mb-1">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                      {ACCOUNT_TYPE_LABELS[type]}
+                      {accountTypeLabel(type)}
                     </span>
                     {showGroupTotal && (
                       <span className="text-[11px] font-medium tabular-nums text-muted-foreground/60">
-                        {format(groupBalance)}
+                        {money(groupBalance)}
                       </span>
                     )}
                   </div>
@@ -234,7 +241,7 @@ export function Sidebar({
               >
                 <ChevronDown className={`h-3 w-3 text-muted-foreground/50 transition-transform ${showArchived ? "" : "-rotate-90"}`} />
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50">
-                  Archived
+                  {t("sidebar.archived")}
                 </span>
                 <span className="text-[11px] text-muted-foreground/40 ml-auto">
                   {archivedAccounts.length}
@@ -273,7 +280,7 @@ export function Sidebar({
           onClick={onAddAccount}
         >
           <Plus className="h-4 w-4" />
-          Add Account
+          {t("sidebar.addAccount")}
         </Button>
       </div>
 
@@ -342,7 +349,8 @@ function AccountRow({
 }: AccountRowProps & {
   dragHandleProps?: Record<string, unknown>;
 }) {
-  const { format } = useFormatMoney();
+  const { t } = useTranslation(["budget", "common"]);
+  const { money } = useFormatters();
   return (
     <div className={`flex items-center rounded-lg transition-all ${
       isActive
@@ -378,7 +386,7 @@ function AccountRow({
         <span className={`ml-2 shrink-0 tabular-nums text-xs font-medium ${
           balance < 0 ? "text-amount-expense/80" : balance > 0 ? "text-amount-income/80" : ""
         } ${dimmed ? "opacity-50" : ""}`}>
-          {format(balance)}
+          {money(balance)}
         </span>
       </Link>
 
@@ -393,7 +401,7 @@ function AccountRow({
         <DropdownMenuContent align="start" side="right" sideOffset={4}>
           <DropdownMenuItem onClick={() => onEdit(account)}>
             <Pencil className="mr-2 h-4 w-4" />
-            Edit
+            {t("common:actions.edit")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => onArchive(account)}>
@@ -402,7 +410,7 @@ function AccountRow({
             ) : (
               <Archive className="mr-2 h-4 w-4" />
             )}
-            {account.archived ? "Unarchive" : "Archive"}
+            {account.archived ? t("common:actions.unarchive") : t("common:actions.archive")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -410,7 +418,7 @@ function AccountRow({
             onClick={() => onDelete(account)}
           >
             <Trash2 className="mr-2 h-4 w-4" />
-            Delete
+            {t("common:actions.delete")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

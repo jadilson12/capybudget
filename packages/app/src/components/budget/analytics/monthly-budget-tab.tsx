@@ -1,16 +1,15 @@
 import { useMemo, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  basisLabel,
-  CATEGORY_GROUP_ORDER,
-} from "@capybudget/core";
+import { CATEGORY_GROUP_ORDER } from "@capybudget/core";
 import type {
   Category,
   CategoryGroup,
   DateRange,
   Transaction,
 } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useLocale, useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
+import { useCategoryDisplayName } from "@/lib/display-names";
 import { useBudgetBasis } from "./use-budget-basis";
 import { buildBudgetView } from "./monthly-budget-rows";
 import { BudgetBarLegend } from "./budget-bar";
@@ -25,7 +24,7 @@ import {
 import { KpiStrip } from "./monthly-budget-kpi-strip";
 import { ColumnHeader, GroupSection } from "./monthly-budget-group-section";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_CATEGORIES_YET } from "./empty-copy";
+import { useBasisLabel } from "./use-analytics-labels";
 
 interface MonthlyBudgetTabProps {
   transactions: Transaction[];
@@ -40,7 +39,11 @@ export function MonthlyBudgetTab({
   dateRange,
   hasAnyTransactions,
 }: MonthlyBudgetTabProps) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
+  const locale = useLocale();
+  const { t } = useTranslation("analytics");
+  const basisLabel = useBasisLabel();
+  const categoryDisplay = useCategoryDisplayName();
   const [hideUntargeted, setHideUntargeted] = useState(false);
   const [drilldown, setDrilldown] = useState<MonthlyBudgetDrilldown | null>(null);
 
@@ -50,7 +53,7 @@ export function MonthlyBudgetTab({
   // The viewed month is the range's start (a first-of-month boundary).
   const referenceLabel = useMemo(
     () => basisLabel(basis, dateRange.start),
-    [basis, dateRange.start],
+    [basisLabel, basis, dateRange.start],
   );
 
   const view = useMemo(
@@ -137,18 +140,18 @@ export function MonthlyBudgetTab({
       <KpiStrip
         cards={[
           {
-            label: "Spent this month",
-            display: format(view.totalSpent),
+            label: t("monthlyBudget.spentThisMonth"),
+            display: money(view.totalSpent),
             tone: "expense",
             onClick:
               view.totalSpent > 0 ? () => setDrilldown({ kind: "all" }) : undefined,
           },
           {
-            label: "Tracking toward",
-            display: format(view.totalTargeted),
+            label: t("monthlyBudget.trackingToward"),
+            display: money(view.totalTargeted),
           },
           {
-            label: "Over budget",
+            label: t("monthlyBudget.overBudget"),
             display: String(view.overCount),
             tone: view.overCount > 0 ? "expense" : "default",
           },
@@ -158,11 +161,11 @@ export function MonthlyBudgetTab({
       {/* Empty state */}
       {!hasCategories ? (
         <EmptyState
-          title="No categories to budget"
+          title={t("monthlyBudget.noCategoriesTitle")}
           description={
             hasAnyTransactions
-              ? "Add categories to start tracking."
-              : NO_CATEGORIES_YET
+              ? t("monthlyBudget.addCategories")
+              : t("empty.noCategoriesYet")
           }
         />
       ) : (
@@ -182,9 +185,9 @@ export function MonthlyBudgetTab({
                     onCheckedChange={(v) => setHideUntargeted(v === true)}
                   />
                   <span>
-                    Show only tracked{" "}
+                    {t("monthlyBudget.showOnlyTracked")}{" "}
                     <span className="text-muted-foreground tabular-nums">
-                      ({targetedCount} of {view.rows.length})
+                      {t("monthlyBudget.trackedCount", { targeted: targetedCount, total: view.rows.length })}
                     </span>
                   </span>
                 </label>
@@ -241,8 +244,8 @@ export function MonthlyBudgetTab({
               }
             : {}
         }
-        title={drilldown ? budgetDrilldownTitle(drilldown) : ""}
-        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, "month", drilldownTransactions, format) : undefined}
+        title={drilldown ? budgetDrilldownTitle(drilldown, t, categoryDisplay) : ""}
+        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, "month", drilldownTransactions, money, locale, t) : undefined}
       />
     </div>
   );

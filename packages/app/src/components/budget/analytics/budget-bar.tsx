@@ -1,7 +1,10 @@
 import { ChevronDown } from "lucide-react";
-import { BUDGET_BASES, BASIS_OPTION_LABELS } from "@capybudget/core";
+import { BUDGET_BASES } from "@capybudget/core";
 import type { BudgetBasis } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useTranslation } from "@capybudget/i18n";
+import { useBasisOptionLabel } from "./use-analytics-labels";
+import type { TFunction } from "i18next";
+import { useFormatters } from "@/hooks/use-formatters";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -26,13 +29,13 @@ const FILL_RED = "var(--amount-expense)";
 
 /** Default reference-pin label when no resolved basis label is threaded
  *  (direct `BudgetBar` renders, tests). In the tab, the live label comes from
- *  `basisLabel(basis, viewedMonth)` and is passed down explicitly. */
+ *  `useBasisLabel()` and is passed down explicitly. */
 const DEFAULT_REFERENCE_LABEL = "3-mo avg";
 
 /** Pin display label. `lastMonth` is fixed; the reference pin shows whatever
  *  basis label is in effect ("6-mo avg", "Dec 2024", …). */
-function pinLabel(kind: BarPin["kind"], referenceLabel: string): string {
-  return kind === "lastMonth" ? "Last month" : referenceLabel;
+function pinLabel(kind: BarPin["kind"], referenceLabel: string, t: TFunction<"analytics">): string {
+  return kind === "lastMonth" ? t("budgetBar.lastMonth") : referenceLabel;
 }
 
 function pct(fraction: number): string {
@@ -75,8 +78,9 @@ function DividerGlyph({ isImplicit }: { isImplicit: boolean }) {
 /** A reference marker sitting above the bar. Keyboard-focusable with a
  *  descriptive label; hover/focus reveals the exact value. */
 function Pin({ pin, referenceLabel }: { pin: BarPin; referenceLabel: string }) {
-  const { format } = useFormatMoney();
-  const label = `${pinLabel(pin.kind, referenceLabel)}: ${format(pin.value)}`;
+  const { money } = useFormatters();
+  const { t } = useTranslation("analytics");
+  const label = `${pinLabel(pin.kind, referenceLabel, t)}: ${money(pin.value)}`;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -108,10 +112,11 @@ function Divider({
   isImplicit: boolean;
   target: number;
 }) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
+  const { t } = useTranslation("analytics");
   const label = isImplicit
-    ? `Auto target: ${format(target)}`
-    : `Budget: ${format(target)}`;
+    ? t("budgetBar.autoTarget", { amount: money(target) })
+    : t("budgetBar.budget", { amount: money(target) });
   return (
     <Tooltip>
       <TooltipTrigger
@@ -147,9 +152,10 @@ export function BudgetBar({
   row: BudgetRow;
   referenceLabel?: string;
 }) {
-  const { format } = useFormatMoney();
+  const { money } = useFormatters();
+  const { t } = useTranslation("analytics");
   const geo = barGeometry(row);
-  const overLabel = geo.state === "over" ? " (over target)" : "";
+  const overLabel = geo.state === "over" ? t("budgetBar.overTarget") : "";
 
   // Untargeted: no scale to draw against, so don't fake a fill (a full-width
   // bar for every untargeted row reads as a "wall of bars" and implies a level
@@ -161,7 +167,7 @@ export function BudgetBar({
       <div
         className="h-2.5 rounded-full border border-dashed border-muted-foreground/25"
         role="img"
-        aria-label="No target yet — Capy needs spending history to set one"
+        aria-label={t("budgetBar.noTargetAria")}
       />
     );
   }
@@ -186,9 +192,11 @@ export function BudgetBar({
       <div
         className="relative h-2.5 rounded-full overflow-hidden"
         role="img"
-        aria-label={`Spent ${format(row.spent)} of ${format(
-          row.effectiveTarget ?? 0,
-        )} target${overLabel}`}
+        aria-label={t("budgetBar.spentOfTargetAria", {
+          spent: money(row.spent),
+          target: money(row.effectiveTarget ?? 0),
+          over: overLabel,
+        })}
       >
         {/* Green zone (0 → divider). */}
         <div
@@ -255,16 +263,18 @@ export function BudgetBarLegend({
   referenceLabel: string;
   onBasisChange: (basis: BudgetBasis) => void;
 }) {
+  const { t } = useTranslation("analytics");
+  const basisOptionLabel = useBasisOptionLabel();
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-      <LegendItem glyph={<PinGlyph kind="lastMonth" />} label="last month" />
+      <LegendItem glyph={<PinGlyph kind="lastMonth" />} label={t("budgetBar.lastMonthLower")} />
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
             <button
               type="button"
               className="inline-flex items-center gap-1.5 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 transition-colors"
-              aria-label={`Comparison basis: ${referenceLabel}`}
+              aria-label={t("budgetBar.comparisonBasisAria", { label: referenceLabel })}
             />
           }
         >
@@ -281,7 +291,7 @@ export function BudgetBarLegend({
           >
             {BUDGET_BASES.map((b) => (
               <DropdownMenuRadioItem key={b} value={b}>
-                {BASIS_OPTION_LABELS[b]}
+                {basisOptionLabel(b)}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>

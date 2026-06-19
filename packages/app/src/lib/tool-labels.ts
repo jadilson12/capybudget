@@ -1,3 +1,6 @@
+import type { TFunction } from "i18next"
+import type { CapyKey } from "@/lib/i18n-keys"
+
 /**
  * Human-readable labels for tool-activity content blocks.
  *
@@ -7,28 +10,32 @@
  * applies uniformly. Unknown tools fall back to their raw name.
  */
 
-const TOOL_LABELS: Record<string, string> = {
-  list_accounts: "Querying accounts",
-  list_transactions: "Querying transactions",
-  list_categories: "Querying categories",
-  search_transactions: "Searching transactions",
-  group_transactions: "Grouping transactions",
-  create_transaction: "Creating transaction",
-  update_transaction: "Updating transaction",
-  delete_transactions: "Deleting transactions",
-  create_account: "Creating account",
-  update_account: "Updating account",
-  delete_account: "Deleting account",
-  create_category: "Creating category",
-  update_category: "Updating category",
-  delete_category: "Deleting category",
-  bulk_update_transactions: "Updating transactions",
-  start_import: "Starting import",
-  render_chart: "Rendering chart",
+const TOOL_KEY = {
+  list_accounts: "tool.list_accounts",
+  list_transactions: "tool.list_transactions",
+  list_categories: "tool.list_categories",
+  search_transactions: "tool.search_transactions",
+  group_transactions: "tool.group_transactions",
+  create_transaction: "tool.create_transaction",
+  update_transaction: "tool.update_transaction",
+  delete_transactions: "tool.delete_transactions",
+  create_account: "tool.create_account",
+  update_account: "tool.update_account",
+  delete_account: "tool.delete_account",
+  create_category: "tool.create_category",
+  update_category: "tool.update_category",
+  delete_category: "tool.delete_category",
+  bulk_update_transactions: "tool.bulk_update_transactions",
+  start_import: "tool.start_import",
+  render_chart: "tool.render_chart",
   // Claude CLI built-in — surfaces when the CLI defers MCP tool schemas.
-  ToolSearch: "Looking up tools",
+  ToolSearch: "tool.ToolSearch",
+} satisfies Record<string, CapyKey>
+
+function isKnownTool(tool: string): tool is keyof typeof TOOL_KEY {
+  return tool in TOOL_KEY
 }
 
-export function getToolLabel(tool: string): string {
-  return TOOL_LABELS[tool] ?? tool
+export function getToolLabel(tool: string, t: TFunction<"capy">): string {
+  return isKnownTool(tool) ? t(TOOL_KEY[tool]) : tool
 }

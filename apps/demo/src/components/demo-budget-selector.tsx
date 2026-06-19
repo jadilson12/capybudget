@@ -2,14 +2,16 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTheme } from "next-themes";
 import { ExternalLink } from "lucide-react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { useTranslation } from "@capybudget/i18n";
 
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageSelect } from "@/components/settings/language-select";
 import { BudgetTile } from "@/components/budget/budget-tile";
 import bgDay from "@/assets/capy-bg-day.webp";
 import bgNight from "@/assets/capy-bg-night.webp";
 
 import { PROFILE_LIST } from "../data/profiles";
-import type { DemoProfile } from "../data/profiles";
+import { useScenarioLabels } from "../data/profiles/labels";
 import { markScenarioEntered } from "../session-entry";
 
 const PROFILE_STICKERS: Record<string, string> = {
@@ -19,17 +21,19 @@ const PROFILE_STICKERS: Record<string, string> = {
 };
 
 export function DemoBudgetSelector() {
+  const { t } = useTranslation("demo");
+  const scenarioLabels = useScenarioLabels();
   const navigate = useNavigate();
   const { theme, resolvedTheme } = useTheme();
 
   const isDark = (resolvedTheme ?? theme) === "dark";
   const bgUrl = isDark ? bgNight : bgDay;
 
-  function handleSelect(profile: DemoProfile) {
+  function handleSelect(profileId: string, name: string) {
     markScenarioEntered();
     void navigate({
       to: "/budget",
-      search: { path: profile.id, name: profile.name },
+      search: { path: profileId, name },
     });
   }
 
@@ -44,6 +48,7 @@ export function DemoBudgetSelector() {
 
       {/* Top-right controls */}
       <div className="fixed top-4 right-4 z-10 flex items-center gap-1">
+        <LanguageSelect withIcon className="border-transparent bg-transparent hover:bg-accent/50 dark:bg-transparent" />
         <ThemeToggle />
       </div>
 
@@ -53,31 +58,34 @@ export function DemoBudgetSelector() {
           {/* Eyebrow + title + subtitle */}
           <div className="space-y-1 mb-8">
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/60 font-mono">
-              Demo
+              {t("selector.eyebrow")}
             </p>
             <h1 className="text-3xl font-bold tracking-tight">Capy Budget</h1>
             <p className="text-sm text-muted-foreground">
-              Pick a scenario to explore.
+              {t("selector.subtitle")}
             </p>
           </div>
 
           {/* Scenario tiles */}
           <div className="space-y-2">
-            {PROFILE_LIST.map((profile) => (
-              <BudgetTile
-                key={profile.id}
-                title={profile.name}
-                subtitle={profile.description}
-                icon={
-                  <img
-                    src={PROFILE_STICKERS[profile.id]}
-                    alt=""
-                    className="h-8 w-8 shrink-0 object-contain"
-                  />
-                }
-                onClick={() => handleSelect(profile)}
-              />
-            ))}
+            {PROFILE_LIST.map((profile) => {
+              const { name, description } = scenarioLabels(profile);
+              return (
+                <BudgetTile
+                  key={profile.id}
+                  title={name}
+                  subtitle={description}
+                  icon={
+                    <img
+                      src={PROFILE_STICKERS[profile.id]}
+                      alt=""
+                      className="h-8 w-8 shrink-0 object-contain"
+                    />
+                  }
+                  onClick={() => handleSelect(profile.id, name)}
+                />
+              );
+            })}
           </div>
 
           {/* Footer — link to the marketing site. */}

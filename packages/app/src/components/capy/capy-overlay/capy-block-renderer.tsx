@@ -1,5 +1,7 @@
+import { useTranslation } from "@capybudget/i18n"
 import { formatText } from "@/lib/format-text"
 import { useFormatMoney } from "@/contexts/currency-context"
+import { useFormatters } from "@/hooks/use-formatters"
 import type {
   BarChartBlock,
   ContentBlock,
@@ -7,6 +9,10 @@ import type {
   TableBlock,
 } from "@capybudget/intelligence"
 import { FileChip } from "./file-chip"
+
+// Chart blocks carry amounts in dollars (per the render_chart tool contract),
+// while the currency formatter takes integer cents — bridge the two at render.
+const dollarsToCents = (dollars: number) => Math.round(dollars * 100)
 
 export function BlockRenderer({
   block,
@@ -124,6 +130,7 @@ const CHART_COLORS = [
 ]
 
 function BarChart({ title, data }: Pick<BarChartBlock, "title" | "data">) {
+  const { money } = useFormatters()
   if (data.length === 0) return null
   const max = Math.max(...data.map((d) => d.value))
   if (max === 0) return null
@@ -139,7 +146,7 @@ function BarChart({ title, data }: Pick<BarChartBlock, "title" | "data">) {
             <div className="flex justify-between text-sm">
               <span className="text-foreground/80">{d.label}</span>
               <span className="font-medium tabular-nums text-foreground/70">
-                ${d.value.toFixed(2)}
+                {money(dollarsToCents(d.value))}
               </span>
             </div>
             <div className="h-2 rounded-full bg-muted/40 overflow-hidden">
@@ -161,6 +168,8 @@ function BarChart({ title, data }: Pick<BarChartBlock, "title" | "data">) {
 /* ── Donut Chart ───────────────────────────────────────────────── */
 
 function DonutChart({ title, data }: Pick<DonutChartBlock, "title" | "data">) {
+  const { t } = useTranslation("capy")
+  const { moneyCompact, percent } = useFormatters()
   const total = data.reduce((sum, d) => sum + d.value, 0)
   if (data.length === 0 || total === 0) return null
   const size = 140
@@ -204,7 +213,7 @@ function DonutChart({ title, data }: Pick<DonutChartBlock, "title" | "data">) {
       path,
       color: CHART_COLORS[i % CHART_COLORS.length],
       label: d.label,
-      pct: ((d.value / total) * 100).toFixed(0),
+      pct: (d.value / total) * 100,
       value: d.value,
     }
   })
@@ -232,7 +241,7 @@ function DonutChart({ title, data }: Pick<DonutChartBlock, "title" | "data">) {
             className="fill-foreground text-lg font-semibold"
             style={{ fontSize: 18 }}
           >
-            ${total.toFixed(0)}
+            {moneyCompact(dollarsToCents(total))}
           </text>
           <text
             x={cx}
@@ -241,7 +250,7 @@ function DonutChart({ title, data }: Pick<DonutChartBlock, "title" | "data">) {
             className="fill-muted-foreground"
             style={{ fontSize: 10 }}
           >
-            total
+            {t("chart.total")}
           </text>
         </svg>
         <div className="space-y-2 min-w-0">
@@ -253,7 +262,7 @@ function DonutChart({ title, data }: Pick<DonutChartBlock, "title" | "data">) {
               />
               <span className="text-foreground/80 truncate">{s.label}</span>
               <span className="text-muted-foreground tabular-nums ml-auto shrink-0">
-                {s.pct}%
+                {percent(s.pct, 0)}
               </span>
             </div>
           ))}

@@ -1,0 +1,34 @@
+{
+  "selector": {
+    "eyebrow": "Demo",
+    "subtitle": "Pick a scenario to explore."
+  },
+  "scenarios": {
+    "underwater": {
+      "name": "Underwater",
+      "description": "Debt-heavy, negative net worth, balance trending the wrong way"
+    },
+    "paycheck-to-paycheck": {
+      "name": "Paycheck to Paycheck",
+      "description": "Income matches outflow, thin savings buffer, flat net worth"
+    },
+    "no-stress": {
+      "name": "No Stress",
+      "description": "High earner, money flows to savings and brokerage, net worth climbs"
+    }
+  },
+  "seeding": {
+    "title": "Seeding random data…",
+    "subtitle": "Any changes reset when you reload.",
+    "progressLabel": "Seeding random data"
+  },
+  "importNotice": {
+    "title": "Smart Import is only available in the desktop app",
+    "body": "Download Capy Budget to turn CSVs and statement photos into a clean ledger.",
+    "cta": "Get the desktop app"
+  },
+  "mobileNotice": {
+    "body": "Capy Budget is a desktop app — this preview isn't built for small screens.",
+    "cta": "Get the desktop app"
+  }
+}

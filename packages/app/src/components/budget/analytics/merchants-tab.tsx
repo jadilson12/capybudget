@@ -12,10 +12,10 @@ import {
   getTopMerchants,
 } from "@capybudget/core";
 import type { Transaction, DateRange } from "@capybudget/core";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useLocale, useTranslation } from "@capybudget/i18n";
+import { useFormatters } from "@/hooks/use-formatters";
 import { useThemeColors } from "./use-theme-colors";
 import { EmptyState } from "@/components/ui/empty-state";
-import { NO_DATA_YET } from "./empty-copy";
 import { TransactionsModal } from "@/components/budget/transactions-modal";
 import { TransactionsDrilldownLink } from "@/components/budget/transactions-drilldown-link";
 import type { PeriodType } from "@/stores/analytics-store";
@@ -27,6 +27,15 @@ import {
   type MerchantDrilldownTarget,
 } from "./merchant-drilldown";
 
+interface MerchantRow {
+  merchant: string;
+  displayMerchant: string;
+  total: number;
+  count: number;
+  percentage: number;
+  isUnknown: boolean;
+}
+
 // ── Tooltip ──
 
 function MerchantTooltipContent({
@@ -34,16 +43,17 @@ function MerchantTooltipContent({
   payload,
 }: {
   active?: boolean;
-  payload?: Array<{ payload: { merchant: string; total: number; count: number; percentage: number } }>;
+  payload?: Array<{ payload: MerchantRow }>;
 }) {
-  const { format } = useFormatMoney();
+  const { money, percent } = useFormatters();
+  const { t } = useTranslation("analytics");
   if (!active || !payload?.length) return null;
   const data = payload[0].payload;
   return (
     <div className="rounded-lg border bg-background px-3 py-2 shadow-popover">
-      <p className="text-sm font-medium">{data.merchant}</p>
+      <p className="text-sm font-medium">{data.displayMerchant}</p>
       <p className="text-sm text-muted-foreground tabular-nums">
-        {format(data.total)} · {data.count} txn{data.count !== 1 ? "s" : ""} · {data.percentage.toFixed(1)}%
+        {money(data.total)} · {t("merchants.txnCount", { count: data.count })} · {percent(data.percentage)}
       </p>
     </div>
   );
@@ -64,10 +74,16 @@ export function MerchantsTab({
   periodType,
   hasAnyTransactions,
 }: MerchantsTabProps) {
-  const { format, formatCompact } = useFormatMoney();
-  const merchants = useMemo(
-    () => getTopMerchants(transactions, 15),
-    [transactions],
+  const { money, moneyCompact, percent } = useFormatters();
+  const locale = useLocale();
+  const { t } = useTranslation("analytics");
+  const merchants = useMemo<MerchantRow[]>(
+    () =>
+      getTopMerchants(transactions, 15).map((m) => ({
+        ...m,
+        displayMerchant: m.isUnknown ? t("fallback.unknown") : m.merchant,
+      })),
+    [transactions, t],
   );
 
   const [drilldown, setDrilldown] = useState<MerchantDrilldownTarget | null>(null);
@@ -77,7 +93,7 @@ export function MerchantsTab({
   const drilldownTransactions = useMemo(() => {
     if (!drilldown) return [];
     return transactions.filter(
-      (t) => t.type === "expense" && matchesTarget(t.merchant, drilldown),
+      (tx) => tx.type === "expense" && matchesTarget(tx.merchant, drilldown),
     );
   }, [drilldown, transactions]);
 
@@ -94,7 +110,7 @@ export function MerchantsTab({
 
   if (merchants.length === 0) {
     return (
-      <EmptyState title={hasAnyTransactions ? "No merchant data in this period" : NO_DATA_YET} />
+      <EmptyState title={hasAnyTransactions ? t("merchants.empty") : t("empty.noDataYet")} />
     );
   }
 
@@ -110,13 +126,13 @@ export function MerchantsTab({
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
           <XAxis
             type="number"
-            tickFormatter={(v: number) => formatCompact(v)}
+            tickFormatter={(v: number) => moneyCompact(v)}
             tick={{ fontSize: 12 }}
             className="text-muted-foreground"
           />
           <YAxis
             type="category"
-            dataKey="merchant"
+            dataKey="displayMerchant"
             tick={{ fontSize: 12 }}
             className="text-muted-foreground"
             width={120}
@@ -140,11 +156,11 @@ export function MerchantsTab({
       {/* Ranked list */}
       <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-x-3 gap-y-1.5 items-center text-sm">
         {/* Header */}
-        <span className="text-xs text-muted-foreground font-medium">#</span>
-        <span className="text-xs text-muted-foreground font-medium">Merchant</span>
-        <span className="text-xs text-muted-foreground font-medium text-right">Amount</span>
-        <span className="text-xs text-muted-foreground font-medium text-right">Txns</span>
-        <span className="text-xs text-muted-foreground font-medium text-right">%</span>
+        <span className="text-xs text-muted-foreground font-medium">{t("merchants.headerRank")}</span>
+        <span className="text-xs text-muted-foreground font-medium">{t("merchants.headerMerchant")}</span>
+        <span className="text-xs text-muted-foreground font-medium text-right">{t("merchants.headerAmount")}</span>
+        <span className="text-xs text-muted-foreground font-medium text-right">{t("merchants.headerTxns")}</span>
+        <span className="text-xs text-muted-foreground font-medium text-right">{t("merchants.headerPercent")}</span>
 
         {merchants.map((m, i) => (
           // Two rows can share the display name "Unknown" (synthetic empty
@@ -155,19 +171,19 @@ export function MerchantsTab({
             <span className="truncate">
               <TransactionsDrilldownLink
                 onClick={() => handleMerchantClick(m)}
-                ariaLabel={`View ${m.merchant} transactions`}
+                ariaLabel={t("a11y.viewTransactionsAria", { name: m.displayMerchant })}
               >
-                {m.merchant}
+                {m.displayMerchant}
               </TransactionsDrilldownLink>
             </span>
             <span className="tabular-nums font-medium text-foreground text-right">
-              {format(m.total)}
+              {money(m.total)}
             </span>
             <span className="tabular-nums text-muted-foreground text-right">
               {m.count}
             </span>
             <span className="tabular-nums text-muted-foreground text-right">
-              {m.percentage.toFixed(1)}%
+              {percent(m.percentage)}
             </span>
           </div>
         ))}
@@ -189,8 +205,8 @@ export function MerchantsTab({
               }
             : {}
         }
-        title={drilldown?.kind === "unknown" ? "Unknown" : (drilldown?.value ?? "")}
-        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, periodType, drilldownTransactions, format) : undefined}
+        title={drilldown?.kind === "unknown" ? t("fallback.unknown") : (drilldown?.value ?? "")}
+        subtitle={drilldown ? formatDrilldownSubtitle(dateRange, periodType, drilldownTransactions, money, locale, t) : undefined}
       />
     </div>
   );

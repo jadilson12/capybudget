@@ -33,14 +33,13 @@ export {
   getToday,
   parseLocalDate,
   formatDateLabel,
+  formatMonthLabel,
+  formatMonthShort,
   localDateTime,
 } from "./utils/date-utils";
 
-// Account-type labels & ordering
-export {
-  ACCOUNT_TYPE_LABELS,
-  ACCOUNT_TYPE_ORDER,
-} from "./constants/account-type-labels";
+// Account-type ordering
+export { ACCOUNT_TYPE_ORDER } from "./constants/account-type-labels";
 
 // Default categories
 export { DEFAULT_CATEGORIES } from "./constants/default-categories";
@@ -233,7 +232,6 @@ export {
   getMonthlyBudgetSummary,
   getCategoryHistoricalStats,
   basisMonths,
-  basisLabel,
 } from "./analytics/analytics";
 
 // Transaction search (fuzzy cross-field + money matcher)

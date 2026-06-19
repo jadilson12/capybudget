@@ -10,7 +10,9 @@ import {
 } from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import { currencySymbol } from "@capybudget/core";
-import { CURRENCIES, type CurrencyOption } from "@/lib/currencies";
+import { useTranslation } from "@capybudget/i18n";
+import { CURRENCY_CODES, type CurrencyCode } from "@/lib/currencies";
+import type { BudgetKey } from "@/lib/i18n-keys";
 import { ChevronDown } from "lucide-react";
 
 interface CurrencyComboboxProps {
@@ -20,7 +22,13 @@ interface CurrencyComboboxProps {
   disabled?: boolean;
 }
 
+// The catalog key is mechanically derived from the code; the annotation pins
+// `currencyName.${CurrencyCode}` to a real `budget` key, so a missing entry
+// fails typecheck rather than rendering a raw key.
+const nameKey = (code: CurrencyCode): BudgetKey => `currencyName.${code}`;
+
 export function CurrencyCombobox({ value, onChange, id, disabled }: CurrencyComboboxProps) {
+  const { t } = useTranslation("budget");
   const [open, setOpen] = useState(false);
 
   return (
@@ -42,21 +50,25 @@ export function CurrencyCombobox({ value, onChange, id, disabled }: CurrencyComb
       </PopoverTrigger>
       <PopoverContent className="w-56 p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search currency…" />
+          <CommandInput placeholder={t("currency.search")} />
           <CommandList>
-            <CommandEmpty>No currencies found.</CommandEmpty>
+            <CommandEmpty>{t("currency.empty")}</CommandEmpty>
             <CommandGroup>
-              {CURRENCIES.map((c) => (
-                <CurrencyItem
-                  key={c.code}
-                  option={c}
-                  selected={c.code === value}
-                  onSelect={() => {
-                    onChange(c.code);
-                    setOpen(false);
-                  }}
-                />
-              ))}
+              {CURRENCY_CODES.map((code) => {
+                const name = t(nameKey(code));
+                return (
+                  <CurrencyItem
+                    key={code}
+                    code={code}
+                    name={name}
+                    selected={code === value}
+                    onSelect={() => {
+                      onChange(code);
+                      setOpen(false);
+                    }}
+                  />
+                );
+              })}
             </CommandGroup>
           </CommandList>
         </Command>
@@ -66,20 +78,22 @@ export function CurrencyCombobox({ value, onChange, id, disabled }: CurrencyComb
 }
 
 function CurrencyItem({
-  option,
+  code,
+  name,
   selected,
   onSelect,
 }: {
-  option: CurrencyOption;
+  code: string;
+  name: string;
   selected: boolean;
   onSelect: () => void;
 }) {
   // `value` carries both code and name so Command's filter matches either.
   return (
-    <CommandItem value={`${option.code} ${option.name}`} data-checked={selected} onSelect={onSelect}>
-      <span className="font-medium">{option.code}</span>
-      <span className="text-muted-foreground">{currencySymbol(option.code)}</span>
-      <span className="truncate text-muted-foreground">{option.name}</span>
+    <CommandItem value={`${code} ${name}`} data-checked={selected} onSelect={onSelect}>
+      <span className="font-medium">{code}</span>
+      <span className="text-muted-foreground">{currencySymbol(code)}</span>
+      <span className="truncate text-muted-foreground">{name}</span>
     </CommandItem>
   );
 }

@@ -13,13 +13,29 @@ export function parseLocalDate(s: string): Date {
   return new Date(s + "T12:00:00");
 }
 
-/** Format YYYY-MM-DD as "Mar 10, 2026". */
-export function formatDateLabel(s: string): string {
-  return parseLocalDate(s).toLocaleDateString("en-US", {
+// The default for callers that don't thread a locale — keeps them rendering English.
+const SOURCE_LOCALE = "en-US";
+
+/** Format YYYY-MM-DD as "Mar 10, 2026" (locale-dependent wording). */
+export function formatDateLabel(s: string, locale: string = SOURCE_LOCALE): string {
+  return parseLocalDate(s).toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
+}
+
+/** Format YYYY-MM-DD as a localized "March 2026" month-and-year label. */
+export function formatMonthLabel(s: string, locale: string = SOURCE_LOCALE): string {
+  return parseLocalDate(s).toLocaleDateString(locale, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/** Localized abbreviated month name for a Date, e.g. "Mar" (en) / "март" (ru). */
+export function formatMonthShort(d: Date, locale: string = SOURCE_LOCALE): string {
+  return d.toLocaleDateString(locale, { month: "short" });
 }
 
 /** Local ISO-ish datetime string (no timezone offset), e.g. "2026-03-10T14:30:05.123". */
