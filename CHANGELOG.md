@@ -9,9 +9,10 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.2.0 — 2026-06-19
 
-- **Language** - Spanish UI, with region-aware number, date, and calendar formatting.
+- **Language** - The whole app speaks English, Russian, and Spanish now — pick your language in Settings, and the UI, Capy's chat, the help guide, and the demo all follow.
+- **Language** - Numbers, dates, percentages, and the calendar's week-start follow your region automatically, independent of the chosen language.
 
 ## 1.1.0 — 2026-06-18
 
