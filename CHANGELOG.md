@@ -11,11 +11,7 @@ CHANGELOG PHILOSOPHY:
 
 ## Unreleased
 
-- **Transactions** - Editing an income now shows its account and currency instead of an empty selector.
-
-## 1.3.0 — 2026-06-21
-
-- **Currency** - Go worldwide: give any account its own currency and everything rolls up into your default — flows at the rate when they happened, balances at today's, with the holding gap shown as a net-worth FX delta and cross-currency transfers that record the real rate on both legs.
+- **Multi-Currency** - give any account its own currency
 
 ## 1.2.0 — 2026-06-19
 

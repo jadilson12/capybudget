@@ -205,6 +205,42 @@ describe("CurrencySection", () => {
     expect(setCurrencyEntry).toHaveBeenCalledWith("EUR", { rate: 1.15, rateSource: "manual" })
   })
 
+  it("does not rewrite a seed estimate as manual when the rate field is focused and blurred unedited", async () => {
+    const user = userEvent.setup()
+    accounts = [makeAccount({ currency: "EUR" })]
+    meta = metaWith("USD", { decimals: 2, symbolPosition: "before" }, {
+      EUR: { decimals: 2, symbolPosition: "before" }, // no manual rate → seed estimate
+    })
+    render(<CurrencySection budgetPath="/b" />)
+
+    // The shown value is the seed estimate trimmed to 6 sig digits (1.08696),
+    // narrower than the full-precision resolved rate. Tabbing past it must be a
+    // no-op, not a silent manual override a hair off the real seed.
+    const input = screen.getByLabelText("1 EUR =")
+    expect(input).toHaveValue("1.08696")
+    await user.click(input)
+    await user.tab()
+
+    expect(setCurrencyEntry).not.toHaveBeenCalled()
+    expect(screen.getByText(/our estimate/i)).toBeInTheDocument()
+  })
+
+  it("still commits a genuinely edited seed rate as a manual override", async () => {
+    const user = userEvent.setup()
+    accounts = [makeAccount({ currency: "EUR" })]
+    meta = metaWith("USD", { decimals: 2, symbolPosition: "before" }, {
+      EUR: { decimals: 2, symbolPosition: "before" }, // seed estimate baseline
+    })
+    render(<CurrencySection budgetPath="/b" />)
+
+    const input = screen.getByLabelText("1 EUR =")
+    await user.clear(input)
+    await user.type(input, "2")
+    await user.tab()
+
+    expect(setCurrencyEntry).toHaveBeenCalledWith("EUR", { rate: 2, rateSource: "manual" })
+  })
+
   it("offers 'use our estimate' on a manual rate and clears the override on click", async () => {
     const user = userEvent.setup()
     meta = metaWith("USD", { decimals: 2, symbolPosition: "before" }, {
@@ -272,6 +308,61 @@ describe("CurrencySection", () => {
     await waitFor(() =>
       expect(screen.queryByText(/Switch default currency\?/i)).not.toBeInTheDocument(),
     )
+  })
+
+  it("previews a foreign row in that currency's own format, not the default's", () => {
+    // RUB defaults to symbol-after, 0 decimals — visibly distinct from USD's
+    // "$4,215.50". The preview box is always shown, so no expand needed.
+    accounts = [makeAccount({ currency: "USD" }), makeAccount({ currency: "RUB" })]
+    render(<CurrencySection budgetPath="/b" />)
+
+    expect(screen.getByText("4,216 ₽")).toHaveClass("text-amount-income")
+    expect(screen.getByText("-1,289 ₽")).toHaveClass("text-amount-expense")
+  })
+
+  it("resets a diverged foreign format to that currency's defaults, leaving the rate untouched", async () => {
+    // RUB account whose stored format diverges from RUB defaults (symbol before,
+    // 2 decimals) and carries a manual rate.
+    const user = userEvent.setup()
+    meta = metaWith("USD", { decimals: 2, symbolPosition: "before" }, {
+      RUB: { decimals: 2, symbolPosition: "before", rate: 90, rateSource: "manual" },
+    })
+    accounts = [makeAccount({ currency: "RUB" })]
+    render(<CurrencySection budgetPath="/b" />)
+
+    // The RUB row owns the only Format settings trigger (USD is single-account → no
+    // exchange section, but its default trigger is still present, so target the row's).
+    const triggers = screen.getAllByRole("button", { name: /Format settings/i })
+    await user.click(triggers[triggers.length - 1])
+    await user.click(screen.getByRole("button", { name: /Reset to RUB defaults/i }))
+
+    // Only the display knobs reset; rate/rateSource are absent from the partial.
+    expect(setCurrencyEntry).toHaveBeenCalledWith("RUB", { decimals: 0, symbolPosition: "after" })
+  })
+
+  it("hides the foreign-format reset link when the format already matches the currency's defaults", async () => {
+    const user = userEvent.setup()
+    meta = metaWith("USD", { decimals: 2, symbolPosition: "before" }, {
+      RUB: { decimals: 0, symbolPosition: "after", rate: 90, rateSource: "manual" },
+    })
+    accounts = [makeAccount({ currency: "RUB" })]
+    render(<CurrencySection budgetPath="/b" />)
+
+    const triggers = screen.getAllByRole("button", { name: /Format settings/i })
+    await user.click(triggers[triggers.length - 1])
+    expect(screen.queryByRole("button", { name: /Reset to RUB defaults/i })).not.toBeInTheDocument()
+  })
+
+  it("shows the rate-history note only when foreign currencies exist", () => {
+    const note = /past transactions keep the rate from the day they happened/i
+
+    const single = render(<CurrencySection budgetPath="/b" />)
+    expect(screen.queryByText(note)).not.toBeInTheDocument()
+    single.unmount()
+
+    accounts = [makeAccount({ currency: "USD" }), makeAccount({ currency: "EUR" })]
+    render(<CurrencySection budgetPath="/b" />)
+    expect(screen.getByText(note)).toBeInTheDocument()
   })
 
   it("keeps a foreign row for a persisted currency no account currently uses", () => {

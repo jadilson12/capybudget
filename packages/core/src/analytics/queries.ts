@@ -44,6 +44,15 @@ export function getAccountsByGroup(
   return grouped;
 }
 
+/** Whether a group's rollup total adds info beyond the rows: 2+ accounts to
+ *  sum, or a lone account in a non-default currency. */
+export function shouldShowGroupTotal(
+  accounts: Account[],
+  defaultCurrency: string,
+): boolean {
+  return accounts.length > 1 || accounts.some((a) => a.currency !== defaultCurrency);
+}
+
 /** Filter transactions by account. Pass null for all accounts. */
 export function getTransactionsForAccount(
   accountId: string | null,
