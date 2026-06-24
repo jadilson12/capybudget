@@ -14,6 +14,7 @@ CHANGELOG PHILOSOPHY:
 - **Transactions** - A prominent "Add transaction" button in the accounts header makes logging a transaction obvious.
 - **Multi-Currency** - give any account its own currency
 - **Demo** - Each scenario gains a foreign-currency account, showing multi-currency net worth.
+- **Language** - Picker shows the language code (EN · English) and lists English, Spanish, Russian; the Russian help guide now matches the app's Капи/Капитал wording.
 
 ## 1.2.0 — 2026-06-19
 
