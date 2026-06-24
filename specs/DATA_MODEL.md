@@ -6,7 +6,7 @@ All data lives in a user-chosen folder as plain CSV files. A `budget.json` metad
 
 ```
 ~/MyBudget/
-  budget.json            ← metadata: schema version, name, currency, formatting
+  budget.json            ← metadata: schema version, name, currency settings
   accounts.csv
   categories.csv
   transactions.csv
@@ -16,11 +16,12 @@ All data lives in a user-chosen folder as plain CSV files. A `budget.json` metad
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "name": "My Budget",
-  "currency": "USD",
-  "currencyDecimals": 2,
-  "currencySymbolPosition": "before",
+  "defaultCurrency": "USD",
+  "currencies": {
+    "USD": { "decimals": 2, "symbolPosition": "before" }
+  },
   "createdAt": "2026-03-07T12:00:00.000Z",
   "lastModified": "2026-03-07T12:00:00.000Z"
 }
@@ -28,7 +29,31 @@ All data lives in a user-chosen folder as plain CSV files. A `budget.json` metad
 
 The schema version enables future migrations. On load, the app checks the version and runs any necessary transformations before proceeding.
 
-The `currency` field selects the display symbol; all amounts are integers in the minor unit regardless. `currencyDecimals` (0–2) and `currencySymbolPosition` (`before` · `after` · `off`) are user-tunable display knobs, seeded from the currency's curated defaults — `{ 0, after }` for RUB, `{ 2, before }` for USD — so a user whose exact currency isn't listed can pick a near one and match their real formatting. Decimals only rounds the rendered figure; money on disk stays ×100, so 2 is the ceiling — a third decimal could only ever render zero, and a stored value above 2 is clamped to 2 on load. Both knobs are seeded from the currency's defaults and re-seeded on a currency switch — changing currency lands on the new currency's conventional formatting rather than carrying the prior tweaks; a "reset to defaults" control restores the current currency's defaults on demand (e.g. after manual tweaks). `currency`, `currencyDecimals`, and `currencySymbolPosition` are additive `budget.json` fields with no schema bump; a budget written before they existed backfills from the currency's defaults on load.
+### Currency settings
+
+Currency lives in two fields: `defaultCurrency`, the ISO code everything rolls up into and the value an account or transaction takes when it carries none of its own; and `currencies`, a map keyed by ISO code holding each currency's settings. **The default currency is just another entry of the same shape** — no split between "the default's settings here, foreign settings there."
+
+Each entry carries display settings: `decimals` (0–2) and `symbolPosition` (`before` · `after` · `off`). A non-default entry additionally carries its `rate` against the default and a `rateSource` tag (`manual` · `seed`) recording where the rate came from; the default entry carries neither — it is the base, an implicit rate of 1.0. `rate` is `rate(currency → default)`: the value of one unit of the currency in default units. Money is integer ×100 for every currency, so the same ratio values cents: `defaultCents = round(nativeCents × rate)`.
+
+A currency earns a settings row once an account uses it, but its entry is kept even after the last account on it is deleted — re-adding the currency restores its rate and display settings intact (persist-when-empty). The entry is seeded lazily from the currency's display defaults the first time it is used; the rows shown are gated on in-use currencies, while the map retains unused entries.
+
+### Exchange rates
+
+A currency's rate against the default is resolved through a fallback chain, yielding the rate **and** a provenance tag the UI shows (whose number it is):
+
+1. **`manual`** — the user's override (`rate` with `rateSource: "manual"`).
+2. **`seed`** — derived from a bundled, USD-anchored seed table by division: `rate(X → D) = usdRates[D] / usdRates[X]`, where `usdRates[c]` is units of `c` per 1 USD. This handles any base, including a non-USD default. `rate(X → X) = 1`.
+3. **`unset`** — 1.0 with a quiet "rate unset" state, when the currency is absent from the seed table.
+
+The seed table ships as `{ base: "USD", rates: { CODE: numberPerUSD, … } }` — deliberately the same shape the checkpoint-3 rate Lambda will serve, so it later becomes the offline floor under the fetched rates with no reshape. Its values are overridable fallbacks (reasonable mid-market figures), not live data. A `todayRates` map of every currency in the budget keyed to its resolved rate against the default feeds the analytics converter; flows value at the rate stamped on each transaction, balances at today's resolved rate.
+
+Display settings are seeded from the currency's curated defaults — `{ 0, after }` for RUB, `{ 2, before }` for USD — so a user whose exact currency isn't listed can pick a near one and match their real formatting. The symbol is currency-driven; all amounts are integers in the minor unit regardless. Decimals only rounds the rendered figure; money on disk stays ×100, so 2 is the ceiling — a third decimal could only ever render zero, and a stored value above 2 is clamped to 2 on load. The default entry's knobs are re-seeded on a currency switch — changing the default lands on the new currency's conventional formatting rather than carrying the prior tweaks; a "reset to defaults" control restores the current currency's defaults on demand (e.g. after manual tweaks).
+
+The currency settings carry no schema bump: they are normalized at load time, not by a numbered migration. A budget written before they existed — whether missing them entirely or carrying the older flat `currency` / `currencyDecimals` / `currencySymbolPosition` fields — is read into the unified shape, lifting any flat fields into the default entry and backfilling missing knobs from the currency's defaults. The normalized shape is written back on the next save, which rewrites every existing budget.json (single-currency ones included); only the shape moves, so the rendered numbers and formatting are unchanged.
+
+### Switching the default currency
+
+Changing the default currency is a **value-preserving rebase**: native amounts are never rewritten — only the unit of account moves. A single-currency budget (no foreign account) is relabeled to the new currency with every stored number unchanged: a balance of 1000 stays 1000, just read in the new currency. A multi-currency budget rescales every stored `fxRate` by the constant `k = rate(OLD → NEW)` — the old default valued in the new — so each foreign flow's value scales uniformly into the new unit; a flow with no stamp (an old-default-currency flow at an implicit 1.0) becomes `k`. The exception is transactions already in the new currency: they are naturalized to face value, their stamp cleared, because the home currency has no exchange rate with itself — a $1000 deposit must read $1000 once dollars are the default, whatever historical rate it once carried. A transfer's two legs are separate transactions, so each rebases by its own account: a leg in the new currency clears, a leg in any other currency rescales by `k`. The rate map is re-expressed against the new default — the new currency becomes the rate-free base, the old default gains a rate of `k`, and each surviving foreign manual rate carries across as `rate × k` (seed-sourced entries re-resolve from the table). Holdings then value at today's resolved rates relative to the new default.
 
 ## Accounts
 
@@ -43,6 +68,7 @@ Every financial entity is an account.
 | `excludeFromNetWorth`  | boolean | Excluded from Net Worth calculations when true                    |
 | `sortOrder`            | integer | Display ordering                                                  |
 | `createdAt`            | string  | ISO 8601                                                          |
+| `currency`             | string  | ISO 4217 code the account holds natively. Set when the account is created, defaulting to the budget default; editable only while the account has no transactions, then locked. Balances roll up into the default at conversion time; a default-currency account converts as the identity. |
 
 **No stored balance.** Balance is always derived: sum of all transactions where `accountId` matches. See Architecture for rationale.
 
@@ -91,6 +117,7 @@ The core entity. Every financial event is a transaction.
 | `merchant`       | string  | Optional. Who you paid or received from.                        |
 | `note`           | string  | Optional. Additional context.                                   |
 | `createdAt`      | string  | ISO 8601                                                        |
+| `fxRate`         | number  | Optional. The account's native→default rate stamped the day the transaction happened, so flows never re-rate as rates move. Empty = a default-currency transaction = an implicit rate of 1.0. Amounts are always stored in the account's native currency; this rate values them in the default at read time. A transfer's two legs each carry their own `fxRate` (see Transfer Architecture § Cross-currency transfers). |
 
 ### Sign Convention
 
@@ -102,6 +129,12 @@ The core entity. Every financial event is a transaction.
 Zero-amount transactions are allowed — useful for tracking non-monetary events or placeholder entries.
 
 An account's balance = `sum(amount)` for all its transactions. No special cases.
+
+### Stamping a flow's rate
+
+A flow's `fxRate` is the rate on the day it happened — frozen history, not a live figure. It is set once at entry from the account's native→default rate (cleared when the account is the default currency), and every later edit carries the stored stamp through verbatim, never re-rating to today. This includes **moving the flow to a different account**: a move is a same-currency operation (see below), so the flow's currency never changes and its historical stamp stays valid — only `accountId` moves. A bulk move behaves the same. (A transfer's per-leg rates follow the same principle: an edit that does not change the transfer's shape preserves both legs' historical stamps; see Transfer Architecture § Cross-currency transfers.)
+
+**A move is same-currency only.** A transaction's `amount` is native to its account's currency, so reinterpreting it under another currency would silently revalue it (1,758,000 IDR read as 1,758,000 THB is nonsense). A non-transfer transaction may therefore move only to an account of the **same currency** — every entry point enforces this: the bulk "move to account" picker and the edit form both disable different-currency targets, a multi-currency selection can't bulk-move at all, and the MCP move/bulk-update path rejects a cross-currency target with an error. Moving value **between** currencies is what a transfer is for (explicit per-leg amounts and rates). Transfers themselves legitimately span currencies, so their from/to account selectors are unrestricted.
 
 ### Transfer Architecture
 
@@ -115,6 +148,18 @@ A transfer is **two linked transactions** with mutual `transferPairId` reference
 - Deleting either leg **cascades** to delete both.
 - Updating a transfer **propagates** amount and date changes to the paired transaction.
 - **Type changes between income ↔ expense are allowed.** Changing to/from transfer is NOT — delete and recreate. This avoids orphaned pair references.
+
+#### Cross-currency transfers
+
+When the two accounts hold different currencies, the legs cannot be equal and opposite — $100 leaving a USD account does not arrive as $100 in a EUR account. So a cross-currency transfer carries **two independent native amounts**, one per leg in that account's currency, and **each leg stamps its own `fxRate`** (its native→default rate), exactly as a standalone flow does. The form shows a second "received" amount field, prefilled from the display cross-rate and fully editable (the user enters what actually landed). A same-currency transfer is unchanged: one amount, mirrored, both legs sharing the one stamped rate.
+
+Per-leg rate rules:
+
+- A leg in the **default currency** leaves `fxRate` empty (an implicit 1.0).
+- When **exactly one** leg is the default, the foreign leg's rate is **derived from the two amounts** — the real rate the transfer executed at, more accurate than the table. From default→foreign, `toRate = fromAmount / toAmount`; from foreign→default, `fromRate = toAmount / fromAmount`.
+- When **neither** leg is the default, the amounts pin the X↔Y rate but not either →default rate, so each leg stamps its own resolver rate.
+
+The two legs net to ~0 in the default currency at the stamped rates (any residue is the genuine FX spread), so a cross-currency transfer fabricates no net-worth gain or loss. Editing a transfer re-stamps both legs from the edited amounts and currencies.
 
 ## Referential Integrity
 
@@ -139,6 +184,7 @@ Each migration `n → n+1` is a pure-ish function on the budget folder, idempote
 |-----------|--------|
 | 1 → 2     | Add `excludeFromNetWorth` column to accounts.csv (default `false`). |
 | 2 → 3     | Add `assigned` column to categories.csv (empty cell = `null` = untracked). |
+| 3 → 4     | Add `currency` column to accounts.csv (stamped with the budget default for every existing account) and `fxRate` column to transactions.csv (empty everywhere). Behavior-identical: every account lands in the default currency, every transaction has an implicit 1.0 rate, so a single-currency budget reads back unchanged. |
 
 ## Import Staging
 

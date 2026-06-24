@@ -71,7 +71,17 @@
     "noAccountsTitle": "No hay cuentas seleccionadas",
     "noAccountsDescription": "Selecciona al menos una cuenta para graficar tu patrimonio neto.",
     "noData": "No hay datos disponibles",
-    "monthLabel": "{{month}} {{year}}"
+    "monthLabel": "{{month}} {{year}}",
+    "fx": {
+      "label": {
+        "gain": "Ganancia cambiaria",
+        "loss": "Pérdida cambiaria",
+        "flat": "Diferencia cambiaria"
+      },
+      "relation": "{{cost}} al entrar → {{spot}} ahora",
+      "whatIsThis": "¿Qué es esto?",
+      "explanation": "Los tipos de cambio han variado desde que entró este dinero extranjero, así que ahora vale más o menos en tu moneda. La ganancia o pérdida no está realizada: solo se concreta al convertir de vuelta."
+    }
   },
   "accountFilter": {
     "allAccounts": "Todas las cuentas",

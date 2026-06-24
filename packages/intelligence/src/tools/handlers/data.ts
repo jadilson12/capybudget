@@ -8,6 +8,7 @@ import type {
   Account,
   Category,
   Transaction,
+  CurrencySettings,
   GroupDimension,
   GroupMetric,
 } from "@capybudget/core"
@@ -18,16 +19,21 @@ import {
   groupTransactions,
 } from "@capybudget/core"
 import type { BudgetRepository } from "@capybudget/persistence"
+import { toolConverter } from "./currency"
 
 export async function handleListAccounts(
   repo: BudgetRepository,
   currency: string,
+  currencies?: Record<string, CurrencySettings>,
 ): Promise<string> {
   const accounts = await repo.getAccounts()
   const transactions = await repo.getTransactions()
+  const converter = toolConverter(currency, currencies)
 
   const result = accounts.map((a: Account) => {
-    const bal = getAccountBalance(a.id, transactions)
+    // Holding: the account's native balance valued in the default at today's
+    // rate, so the model sees totals it can compare across currencies.
+    const bal = getAccountBalance(a.id, transactions, converter, a.currency)
     return {
       id: a.id,
       name: a.name,
@@ -116,18 +122,24 @@ function compactRow(t: Transaction) {
   }
 }
 
-/** Verbose, name-resolved row — `list_transactions`' default shape. */
+/**
+ * Verbose, name-resolved row — `list_transactions`' default shape. The amount
+ * is the transaction's native value rendered in its account's own currency
+ * (the truth of the row); `group_transactions` is the path for totals rolled
+ * up into the budget default.
+ */
 function verboseRow(
   t: Transaction,
   accountMap: Map<string, string>,
   categoryMap: Map<string, string>,
-  currency: string,
+  accountCurrency: Map<string, string>,
+  defaultCurrency: string,
 ) {
   return {
     id: t.id,
     date: t.datetime.slice(0, 10),
     type: t.type,
-    amount: formatMoney(t.amount, currency),
+    amount: formatMoney(t.amount, accountCurrency.get(t.accountId) ?? defaultCurrency),
     amountCents: t.amount,
     account: accountMap.get(t.accountId) ?? t.accountId,
     category: categoryMap.get(t.categoryId) ?? (t.categoryId || "Uncategorized"),
@@ -146,6 +158,7 @@ export async function handleListTransactions(
   const categories = await repo.getCategories()
 
   const accountMap = new Map(accounts.map((a: Account) => [a.id, a.name]))
+  const accountCurrency = new Map(accounts.map((a: Account) => [a.id, a.currency]))
   const categoryMap = new Map(categories.map((c: Category) => [c.id, c.name]))
 
   let txns: Transaction[]
@@ -172,7 +185,9 @@ export async function handleListTransactions(
   const result =
     args.format === "compact"
       ? txns.map(compactRow)
-      : txns.map((t) => verboseRow(t, accountMap, categoryMap, currency))
+      : txns.map((t) =>
+          verboseRow(t, accountMap, categoryMap, accountCurrency, currency),
+        )
 
   return JSON.stringify(result, null, 2)
 }
@@ -201,6 +216,8 @@ export async function handleSearchTransactions(
 
 export async function handleGroupTransactions(
   repo: BudgetRepository,
+  currency: string,
+  currencies: Record<string, CurrencySettings> | undefined,
   args: Record<string, unknown>,
 ): Promise<string> {
   const allTxns = await repo.getTransactions()
@@ -214,6 +231,8 @@ export async function handleGroupTransactions(
     ? searchTransactions(filtered, args.query as string, { accounts, categories })
     : filtered
 
+  // Sums roll up into the default currency so the model reasons in one unit.
+  const converter = toolConverter(currency, currencies)
   const groups = groupTransactions(
     scoped,
     {
@@ -224,7 +243,7 @@ export async function handleGroupTransactions(
       sortDir: args.sortDir as "asc" | "desc" | undefined,
       limit: args.limit as number | undefined,
     },
-    { accounts, categories },
+    { accounts, categories, converter },
   )
 
   return JSON.stringify(groups, null, 2)

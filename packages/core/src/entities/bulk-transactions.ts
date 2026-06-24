@@ -28,7 +28,9 @@ export function bulkAssignCategory(
   );
 }
 
-/** Move multiple transactions to a different account. Skips transfers. */
+/** Move multiple transactions to a different account. Skips transfers. A move
+ *  is same-currency only (the caller enforces it), so each flow's amount and its
+ *  historical `fxRate` stay valid in the new account — only `accountId` changes. */
 export function bulkMoveAccount(
   ids: Set<string>,
   accountId: string,

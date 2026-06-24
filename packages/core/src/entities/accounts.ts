@@ -6,11 +6,15 @@ export interface AccountFormData {
   name: string;
   type: AccountType;
   openingBalance?: number;
+  /** The account's native currency. Omitted → the budget default. Editable in
+   *  the dialog only while the account has no transactions. */
+  currency?: string;
 }
 
 export function createAccount(
   input: AccountFormData,
   existing: Account[],
+  defaultCurrency: string,
 ): Account {
   const sameType = existing.filter((a) => a.type === input.type);
   const maxSort =
@@ -26,6 +30,7 @@ export function createAccount(
     excludeFromNetWorth: false,
     sortOrder: maxSort + 1,
     createdAt: new Date().toISOString(),
+    currency: input.currency ?? defaultCurrency,
   };
 }
 
@@ -33,6 +38,7 @@ export function createOpeningBalanceTransaction(
   account: Account,
   amount: number,
   existing: Transaction[],
+  fxRate?: number,
 ): Transaction[] {
   if (amount === 0) return existing;
 
@@ -47,6 +53,7 @@ export function createOpeningBalanceTransaction(
     merchant: "Opening Balance",
     note: "",
     createdAt: new Date().toISOString(),
+    fxRate,
   };
 
   return [...existing, txn];
@@ -55,9 +62,24 @@ export function createOpeningBalanceTransaction(
 export function updateAccount(
   input: AccountFormData,
   existing: Account[],
+  transactions: Transaction[],
 ): Account[] {
+  const current = existing.find((a) => a.id === input.id);
+  if (
+    current &&
+    input.currency !== undefined &&
+    input.currency !== current.currency &&
+    transactions.some((t) => t.accountId === input.id)
+  ) {
+    throw new Error(
+      "Cannot change the currency of an account with transactions. Their amounts are stored in the account's currency — create a new account instead.",
+    );
+  }
+
   return existing.map((a) =>
-    a.id === input.id ? { ...a, name: input.name, type: input.type } : a,
+    a.id === input.id
+      ? { ...a, name: input.name, type: input.type, currency: input.currency ?? a.currency }
+      : a,
   );
 }
 

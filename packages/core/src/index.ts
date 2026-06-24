@@ -13,12 +13,20 @@ export type {
 export { BUDGET_BASES, BASIS_OPTION_LABELS } from "./entities/types";
 
 // Money utilities
-export type { MoneyFormat, SymbolPosition, BudgetFormatFields } from "./utils/money";
+export type {
+  MoneyFormat,
+  SymbolPosition,
+  RateSource,
+  CurrencySettings,
+  BudgetCurrencyFields,
+  BudgetCurrency,
+} from "./utils/money";
 export {
   DEFAULT_CURRENCY,
   CURRENCY_FORMAT_DEFAULTS,
   formatDefaultsFor,
-  resolveBudgetFormat,
+  resolveBudgetCurrency,
+  defaultCurrencySettings,
   formatMoney,
   formatMoneyCompact,
   currencySymbol,
@@ -70,11 +78,12 @@ export {
 } from "./entities/categories";
 
 // Transaction operations
-export type { TransactionFormData } from "./entities/transactions";
+export type { TransactionFormData, TransferLegs } from "./entities/transactions";
 export {
   createTransaction,
   updateTransaction,
   deleteTransaction,
+  splitTransferLegs,
 } from "./entities/transactions";
 
 // Bulk transaction operations
@@ -94,13 +103,14 @@ export {
 } from "./utils/merchant";
 
 // Queries
-export type { TransferPair } from "./analytics/queries";
+export type { TransferPair, NetWorthBreakdown } from "./analytics/queries";
 export {
   CATEGORY_GROUP_ORDER,
   getAccountBalance,
   getAccountsByGroup,
   getTransactionsForAccount,
   getNetWorth,
+  getNetWorthBreakdown,
   resolveTransferPair,
 } from "./analytics/queries";
 
@@ -233,6 +243,33 @@ export {
   getCategoryHistoricalStats,
   basisMonths,
 } from "./analytics/analytics";
+
+// Currency conversion (native → default, for analytics roll-ups)
+export type { CurrencyConverter } from "./analytics/converter";
+export {
+  IDENTITY_CONVERTER,
+  createConverter,
+} from "./analytics/converter";
+
+// Exchange rates (resolver fallback chain + bundled seed table)
+export type {
+  SeedRateTable,
+  RateProvenance,
+  ResolvedRate,
+  TransferRates,
+} from "./utils/rates";
+export {
+  SEED_RATES,
+  resolveRate,
+  buildTodayRates,
+  stampFxRate,
+  stampTransferRates,
+  crossRateAmount,
+} from "./utils/rates";
+
+// Default-currency rebase (value-preserving unit-of-account switch)
+export type { RebaseResult } from "./utils/rebase-currency";
+export { rebaseDefaultCurrency } from "./utils/rebase-currency";
 
 // Transaction search (fuzzy cross-field + money matcher)
 export type { SearchContext } from "./analytics/search";

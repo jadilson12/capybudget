@@ -20,12 +20,15 @@ import type {
   StreamEvent,
 } from "@capybudget/intelligence";
 import type { BudgetRepository, FileAdapter } from "@capybudget/persistence";
+import type { CurrencySettings } from "@capybudget/core";
 
 export interface SessionLifecycleOptions {
   budgetPath: string;
   mcpServerPath: string;
-  /** Budget's display currency (ISO 4217), threaded into the adapter's tool dispatch. */
+  /** Budget's default currency (ISO 4217), threaded into the adapter's tool dispatch. */
   currency: string;
+  /** Per-currency settings, threaded into tool dispatch for FX stamping + roll-up. */
+  currencies?: Record<string, CurrencySettings>;
   /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
   repo?: BudgetRepository;
   /** Required by API adapters (in-process tool dispatch); ignored by Claude CLI. */
@@ -128,6 +131,11 @@ export function useSessionLifecycle<TOpts extends SessionLifecycleOptions>(
         mcpServerPath: o.mcpServerPath,
         systemPrompt,
         currency: o.currency,
+        currencies: o.currencies,
+        // Live read through the ref: the rate map isn't baked into the prompt,
+        // so a manual rate edit reaches the running session's next tool call
+        // without a rebuild. `o` is a snapshot; `optsRef.current` stays fresh.
+        getCurrencies: () => optsRef.current.currencies,
         onEvent: handleStreamEvent,
         onExit: handleExit,
         repo: o.repo,

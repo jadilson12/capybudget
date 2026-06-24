@@ -29,6 +29,7 @@ import type { Transaction } from "@capybudget/core";
 import { toDateString } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useFormatters } from "@/hooks/use-formatters";
+import { useConverter, useAccountMoney } from "@/contexts/currency-context";
 import { useCategoryDisplayName } from "@/lib/display-names";
 import {
   CalendarDays,
@@ -51,6 +52,8 @@ interface BulkActionBarProps {
 export function BulkActionBar({ selectedIds, transactions, onClear }: BulkActionBarProps) {
   const { t } = useTranslation(["budget", "common"]);
   const { money, date: formatDate } = useFormatters();
+  const converter = useConverter();
+  const accountMoney = useAccountMoney();
   const categoryDisplay = useCategoryDisplayName();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -67,11 +70,35 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
 
   const selected = transactions.filter((t) => selectedIds.has(t.id));
   const count = selected.length;
-  const totalAmount = selected.reduce((sum, t) => sum + t.amount, 0);
+  const accountCurrency = (id: string) => accounts.find((a) => a.id === id)?.currency;
+
+  // When every selected row is in one currency the total reads natively in it;
+  // a selection spanning currencies has no native total, so it rolls up into the
+  // default at each row's stamped rate (identity for a single-currency budget).
+  const totalCurrencies = new Set(selected.map((t) => accountCurrency(t.accountId)));
+  const totalCurrency = totalCurrencies.size === 1 ? [...totalCurrencies][0] : undefined;
+  const totalAmount =
+    totalCurrency !== undefined
+      ? selected.reduce((sum, t) => sum + t.amount, 0)
+      : selected.reduce((sum, t) => sum + converter.flowToDefault(t.amount, t.fxRate), 0);
+  const totalLabel =
+    totalCurrency !== undefined ? accountMoney(totalAmount, totalCurrency) : money(totalAmount);
 
   const categoryIds = new Set(selected.filter((t) => t.type !== "transfer").map((t) => t.categoryId));
   const hasTransfers = selected.some((t) => t.type === "transfer");
-  const nonTransferCount = selected.filter((t) => t.type !== "transfer").length;
+  const nonTransfers = selected.filter((t) => t.type !== "transfer");
+  const nonTransferCount = nonTransfers.length;
+
+  // A move keeps each amount native to its account's currency, so it's a
+  // same-currency operation: the moved flows must share one currency, and only
+  // accounts in that currency are valid targets. A selection spanning multiple
+  // currencies can't move to any single account — the Move action disables.
+  const movedCurrencies = new Set(nonTransfers.map((t) => accountCurrency(t.accountId)));
+  const isMixedCurrency = movedCurrencies.size > 1;
+  const moveCurrency = movedCurrencies.size === 1 ? [...movedCurrencies][0] : undefined;
+  const moveDisabledIds = accounts
+    .filter((a) => a.currency !== moveCurrency)
+    .map((a) => a.id);
 
   const handleDelete = () => {
     bulkDelete.mutate(selectedIds);
@@ -133,7 +160,7 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
               {t("bulk.selected", { count })}
             </span>
             <span className="text-sm text-muted-foreground tabular-nums font-semibold">
-              {money(totalAmount)}
+              {totalLabel}
             </span>
           </div>
 
@@ -164,7 +191,12 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
-                <Button variant="outline" size="icon-sm" className="text-muted-foreground" />
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  className="text-muted-foreground"
+                  aria-label={t("bulk.moreActions")}
+                />
               }
             >
               <MoreHorizontal className="h-3.5 w-3.5" />
@@ -205,7 +237,7 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
             <DialogHeader>
               <DialogTitle>{t("bulk.deleteDialog.title", { count })}</DialogTitle>
               <DialogDescription>
-                {t("bulk.deleteDialog.description", { count, total: money(totalAmount) })}
+                {t("bulk.deleteDialog.description", { count, total: totalLabel })}
                 {hasTransfers && t("bulk.deleteDialog.transferNote")}
               </DialogDescription>
             </DialogHeader>
@@ -226,16 +258,24 @@ export function BulkActionBar({ selectedIds, transactions, onClear }: BulkAction
             <DialogHeader>
               <DialogTitle>{t("bulk.moveDialog.title")}</DialogTitle>
               <DialogDescription>
-                {t("bulk.moveDialog.description", { count: nonTransferCount })}
-                {hasTransfers && t("bulk.moveDialog.transferNote")}
+                {isMixedCurrency
+                  ? t("bulk.moveMixedCurrency")
+                  : t("bulk.moveDialog.description", { count: nonTransferCount })}
+                {!isMixedCurrency && hasTransfers && t("bulk.moveDialog.transferNote")}
               </DialogDescription>
             </DialogHeader>
-            <AccountSelector
-              accounts={accounts}
-              value=""
-              onChange={handleMoveAccount}
-              defaultOpen
-            />
+            {!isMixedCurrency && (
+              <>
+                <p className="text-xs text-muted-foreground">{t("bulk.moveDialog.sameCurrencyTip")}</p>
+                <AccountSelector
+                  accounts={accounts}
+                  value=""
+                  onChange={handleMoveAccount}
+                  disableIds={moveDisabledIds}
+                  defaultOpen
+                />
+              </>
+            )}
           </DialogContent>
         </Dialog>
       )}

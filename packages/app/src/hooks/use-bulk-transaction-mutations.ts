@@ -28,6 +28,9 @@ export function useBulkAssignCategory() {
 export function useBulkMoveAccount() {
   return useBudgetMutation<{ ids: Set<string>; accountId: string }>(
     async ({ ids, accountId }, { transactions }) => {
+      // A move is same-currency only (the UI disables cross-currency targets),
+      // so each flow's amount and historical stamp stay valid — only the account
+      // changes.
       const next = bulkMoveAccount(ids, accountId, transactions.get());
       transactions.set(next);
       await transactions.save(next);

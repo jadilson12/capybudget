@@ -54,6 +54,8 @@
       "namePlaceholder": "напр. Сбер Дебетовая",
       "nameRequired": "Укажи название счёта",
       "type": "Тип",
+      "currency": "Валюта",
+      "currencyLocked": "Блокируется, когда у счёта появляются операции. Чтобы сменить валюту, создай новый счёт.",
       "openingBalance": "Начальный остаток",
       "create": "Создать счёт"
     },
@@ -72,6 +74,9 @@
       "unset": "Не задано",
       "to": "Куда…",
       "clearFilter": "Сбросить фильтр по счёту"
+    },
+    "header": {
+      "inDefault": "≈ {{amount}}"
     },
     "fallbackLabel": "счёт",
     "notFound": "Счёт не найден",
@@ -245,7 +250,8 @@
       "categoryPlaceholder": "Категория",
       "notesPlaceholder": "Заметка (необязательно)",
       "selectAccount": "Выбери счёт",
-      "selectBothAccounts": "Выбери оба счёта"
+      "selectBothAccounts": "Выбери оба счёта",
+      "receivedAmount": "Сумма зачисления"
     },
     "toast": {
       "added": "Операция добавлена",
@@ -285,10 +291,12 @@
     "changeDate": "Изменить дату",
     "changeMerchant": "Изменить получателя",
     "clearSelection": "Снять выделение",
+    "moreActions": "Ещё действия",
     "merchantPlaceholder": "Название получателя",
     "apply": "Применить",
     "uncategorized": "Без категории",
     "mixedCategories": "Разные категории",
+    "moveMixedCurrency": "В выборке разные валюты — перенос сохраняет сумму в её валюте, поэтому для перевода денег между валютами используй перевод.",
     "toast": {
       "deleted_one": "Удалена {{count}} операция",
       "deleted_few": "Удалено {{count}} операции",
@@ -332,7 +340,8 @@
       "description_few": "Перенести {{count}} операции на другой счёт.",
       "description_many": "Перенести {{count}} операций на другой счёт.",
       "description_other": "Перенести {{count}} операций на другой счёт.",
-      "transferNote": " Переводы будут пропущены."
+      "transferNote": " Переводы будут пропущены.",
+      "sameCurrencyTip": "Только счета в той же валюте — для перевода денег между валютами используй перевод."
     },
     "dateDialog": {
       "title": "Изменить дату",

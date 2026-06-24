@@ -15,19 +15,19 @@ import {
 
 describe("createAccount", () => {
   it("assigns a UUID and createdAt", () => {
-    const account = createAccount({ name: "Cash", type: "cash" }, []);
+    const account = createAccount({ name: "Cash", type: "cash" }, [], "USD");
     expect(account.id).toBeTruthy();
     expect(account.createdAt).toBeTruthy();
     expect(account.archived).toBe(false);
   });
 
   it("defaults excludeFromNetWorth to false", () => {
-    const account = createAccount({ name: "Cash", type: "cash" }, []);
+    const account = createAccount({ name: "Cash", type: "cash" }, [], "USD");
     expect(account.excludeFromNetWorth).toBe(false);
   });
 
   it("sets sortOrder to 1 when no accounts of that type exist", () => {
-    const account = createAccount({ name: "Cash", type: "cash" }, []);
+    const account = createAccount({ name: "Cash", type: "cash" }, [], "USD");
     expect(account.sortOrder).toBe(1);
   });
 
@@ -40,6 +40,7 @@ describe("createAccount", () => {
     const account = createAccount(
       { name: "New Checking", type: "checking" },
       existing,
+      "USD",
     );
     expect(account.sortOrder).toBe(8);
   });
@@ -49,8 +50,23 @@ describe("createAccount", () => {
     const account = createAccount(
       { name: "Cash", type: "cash" },
       existing,
+      "USD",
     );
     expect(account.sortOrder).toBe(1);
+  });
+
+  it("falls back to the budget default currency when none is given", () => {
+    const account = createAccount({ name: "Rubles", type: "cash" }, [], "RUB");
+    expect(account.currency).toBe("RUB");
+  });
+
+  it("honors an explicit currency over the budget default", () => {
+    const account = createAccount(
+      { name: "Euros", type: "checking", currency: "EUR" },
+      [],
+      "USD",
+    );
+    expect(account.currency).toBe("EUR");
   });
 });
 
@@ -81,6 +97,18 @@ describe("createOpeningBalanceTransaction", () => {
     expect(result).toHaveLength(3);
     expect(result[2].merchant).toBe("Opening Balance");
   });
+
+  it("stamps the caller's fxRate when the opening balance is on a foreign account", () => {
+    const account = makeAccount({ id: "acc-rub", currency: "RUB" });
+    const [txn] = createOpeningBalanceTransaction(account, 10000, [], 0.011);
+    expect(txn.fxRate).toBe(0.011);
+  });
+
+  it("leaves fxRate empty for a default-currency opening balance", () => {
+    const account = makeAccount({ id: "acc-new" });
+    const [txn] = createOpeningBalanceTransaction(account, 10000, []);
+    expect(txn.fxRate).toBeUndefined();
+  });
 });
 
 describe("updateAccount", () => {
@@ -89,6 +117,7 @@ describe("updateAccount", () => {
     const result = updateAccount(
       { id: "acc-1", name: "New", type: "savings" },
       [acc],
+      [],
     );
     expect(result[0].name).toBe("New");
     expect(result[0].type).toBe("savings");
@@ -104,6 +133,7 @@ describe("updateAccount", () => {
     const result = updateAccount(
       { id: "acc-1", name: "Updated", type: "cash" },
       [acc],
+      [],
     );
     expect(result[0].sortOrder).toBe(5);
     expect(result[0].archived).toBe(true);
@@ -116,8 +146,42 @@ describe("updateAccount", () => {
     const result = updateAccount(
       { id: "acc-1", name: "Changed", type: "cash" },
       [target, other],
+      [],
     );
     expect(result[1].name).toBe("Other");
+  });
+
+  it("rejects a currency change on an account that has transactions", () => {
+    const acc = makeAccount({ id: "acc-1", currency: "USD" });
+    const txns = [makeTxn({ accountId: "acc-1", amount: -5000 })];
+    expect(() =>
+      updateAccount({ id: "acc-1", name: acc.name, type: acc.type, currency: "EUR" }, [acc], txns),
+    ).toThrow(/currency/i);
+  });
+
+  it("allows a currency change on an account with no transactions", () => {
+    const acc = makeAccount({ id: "acc-1", currency: "USD" });
+    const txns = [makeTxn({ accountId: "acc-2", amount: -5000 })]; // different account
+    const result = updateAccount(
+      { id: "acc-1", name: acc.name, type: acc.type, currency: "EUR" },
+      [acc],
+      txns,
+    );
+    expect(result[0].currency).toBe("EUR");
+  });
+
+  it("allows name/type edits on an account with transactions when currency is unchanged", () => {
+    const acc = makeAccount({ id: "acc-1", name: "Old", type: "checking", currency: "USD" });
+    const txns = [makeTxn({ accountId: "acc-1", amount: -5000 })];
+    // No currency arg → no re-denomination, so the guard never fires even with rows.
+    const result = updateAccount(
+      { id: "acc-1", name: "New", type: "savings" },
+      [acc],
+      txns,
+    );
+    expect(result[0].name).toBe("New");
+    expect(result[0].type).toBe("savings");
+    expect(result[0].currency).toBe("USD");
   });
 });
 

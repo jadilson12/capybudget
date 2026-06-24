@@ -38,9 +38,11 @@ import {
 } from "@/components/ui/dialog";
 import { getAccountBalance, getAccountsByGroup, getNetWorth, isOpeningBalanceTxn } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
+import { useConverter, useAccountMoney } from "@/contexts/currency-context";
 import { useAccountTypeLabel } from "@/lib/display-names";
 import { useFormatters } from "@/hooks/use-formatters";
-import { useAccounts, useTransactions } from "@/hooks/use-budget-data";
+import { useAccounts, useTransactions, useIsMultiCurrency } from "@/hooks/use-budget-data";
+import { CurrencyBadge } from "./currency-badge";
 import { NetWorthFilter } from "./net-worth-filter";
 import {
   useDeleteAccount,
@@ -67,6 +69,9 @@ export function Sidebar({
   const { t } = useTranslation("budget");
   const accountTypeLabel = useAccountTypeLabel();
   const { money, moneyCompact } = useFormatters();
+  const accountMoney = useAccountMoney();
+  const isMultiCurrency = useIsMultiCurrency();
+  const converter = useConverter();
   const { data: accounts = [] } = useAccounts();
   const { data: transactions = [] } = useTransactions();
   const deleteAccount = useDeleteAccount();
@@ -80,7 +85,7 @@ export function Sidebar({
     return found ?? (params.accountId as string | undefined);
   }, undefined);
 
-  const netWorth = getNetWorth(accounts, transactions);
+  const netWorth = getNetWorth(accounts, transactions, converter);
   const groupedAccounts = getAccountsByGroup(accounts);
   const archivedAccounts = accounts.filter((a) => a.archived);
 
@@ -113,6 +118,9 @@ export function Sidebar({
         onSuccess: () => toast.success(t("account.toast.unarchived", { name: account.name })),
       });
     } else {
+      // Archive eligibility is the native derived balance being zero (what core
+      // enforces) — currency-invariant, so this guard stays unconverted; a
+      // converted near-zero must never round a non-empty foreign account to OK.
       const balance = getAccountBalance(account.id, transactions);
       if (balance !== 0) {
         setErrorDialog({
@@ -189,7 +197,7 @@ export function Sidebar({
               const showGroupTotal = accts.length > 1;
               const groupBalance = showGroupTotal
                 ? accts.reduce(
-                    (sum, a) => sum + getAccountBalance(a.id, transactions),
+                    (sum, a) => sum + getAccountBalance(a.id, transactions, converter, a.currency),
                     0,
                   )
                 : 0;
@@ -217,6 +225,8 @@ export function Sidebar({
                           key={account.id}
                           account={account}
                           balance={getAccountBalance(account.id, transactions)}
+                          accountMoney={accountMoney}
+                          showCurrency={isMultiCurrency}
                           budgetPath={budgetPath}
                           budgetName={budgetName}
                           isActive={activeAccountId === account.id}
@@ -255,6 +265,8 @@ export function Sidebar({
                       key={account.id}
                       account={account}
                       balance={getAccountBalance(account.id, transactions)}
+                      accountMoney={accountMoney}
+                      showCurrency={isMultiCurrency}
                       budgetPath={budgetPath}
                       budgetName={budgetName}
                       isActive={activeAccountId === account.id}
@@ -301,7 +313,10 @@ export function Sidebar({
 
 interface AccountRowProps {
   account: Account;
+  /** Native balance, in the account's own currency — formatted via `accountMoney`. */
   balance: number;
+  accountMoney: (cents: number, currency?: string) => string;
+  showCurrency: boolean;
   budgetPath: string;
   budgetName: string;
   isActive: boolean;
@@ -338,6 +353,8 @@ function SortableAccountRow(props: AccountRowProps) {
 function AccountRow({
   account,
   balance,
+  accountMoney,
+  showCurrency,
   budgetPath,
   budgetName,
   isActive,
@@ -350,7 +367,6 @@ function AccountRow({
   dragHandleProps?: Record<string, unknown>;
 }) {
   const { t } = useTranslation(["budget", "common"]);
-  const { money } = useFormatters();
   return (
     <div className={`flex items-center rounded-lg transition-all ${
       isActive
@@ -382,11 +398,14 @@ function AccountRow({
               : "text-sidebar-foreground/80 hover:text-sidebar-foreground"
         }`}
       >
-        <span className="truncate">{account.name}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{account.name}</span>
+          {showCurrency && <CurrencyBadge currency={account.currency} className={dimmed ? "opacity-50" : ""} />}
+        </span>
         <span className={`ml-2 shrink-0 tabular-nums text-xs font-medium ${
           balance < 0 ? "text-amount-expense/80" : balance > 0 ? "text-amount-income/80" : ""
         } ${dimmed ? "opacity-50" : ""}`}>
-          {money(balance)}
+          {accountMoney(balance, account.currency)}
         </span>
       </Link>
 

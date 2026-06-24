@@ -70,7 +70,17 @@
     "noAccountsTitle": "No accounts selected",
     "noAccountsDescription": "Select at least one account to chart your net worth.",
     "noData": "No data available",
-    "monthLabel": "{{month}} {{year}}"
+    "monthLabel": "{{month}} {{year}}",
+    "fx": {
+      "label": {
+        "gain": "Currency gain",
+        "loss": "Currency loss",
+        "flat": "Currency change"
+      },
+      "relation": "{{cost}} in → {{spot}} now",
+      "whatIsThis": "What is this?",
+      "explanation": "Exchange rates have moved since this foreign money came in, so it’s worth more or less in your currency now. The gain or loss is unrealized — you only lock it in by converting back."
+    }
   },
   "accountFilter": {
     "allAccounts": "All accounts",

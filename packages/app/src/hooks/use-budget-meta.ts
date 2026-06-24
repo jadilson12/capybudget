@@ -2,34 +2,34 @@ import { useCallback } from "react";
 import {
   DEFAULT_CURRENCY,
   formatDefaultsFor,
-  resolveBudgetFormat,
+  resolveBudgetCurrency,
+  type BudgetCurrencyFields,
   type BudgetMeta,
+  type CurrencySettings,
   type MoneyFormat,
 } from "@capybudget/core";
 import { useBudgetFile } from "@/hooks/use-budget-file";
 import { SCHEMA_VERSION } from "../../../../src/services/budget";
 
-const DEFAULT_FORMAT = formatDefaultsFor(DEFAULT_CURRENCY);
-
 const DEFAULT_META: BudgetMeta = {
   schemaVersion: SCHEMA_VERSION,
   name: "",
-  currency: DEFAULT_CURRENCY,
-  currencyDecimals: DEFAULT_FORMAT.decimals,
-  currencySymbolPosition: DEFAULT_FORMAT.symbolPosition,
+  defaultCurrency: DEFAULT_CURRENCY,
+  currencies: { [DEFAULT_CURRENCY]: formatDefaultsFor(DEFAULT_CURRENCY) },
   createdAt: "",
   lastModified: "",
 };
 
 function parseMeta(text: string): BudgetMeta {
-  const raw = JSON.parse(text) as Partial<BudgetMeta>;
-  const { currency, decimals, symbolPosition } = resolveBudgetFormat(raw);
+  const stored = JSON.parse(text) as BudgetCurrencyFields & Partial<BudgetMeta>;
+  // Pick the entity identity explicitly and resolve the currency settings —
+  // any superseded flat currency fields are left behind, never re-saved.
   return {
-    ...DEFAULT_META,
-    ...raw,
-    currency,
-    currencyDecimals: decimals,
-    currencySymbolPosition: symbolPosition,
+    schemaVersion: stored.schemaVersion ?? DEFAULT_META.schemaVersion,
+    name: stored.name ?? DEFAULT_META.name,
+    createdAt: stored.createdAt ?? DEFAULT_META.createdAt,
+    lastModified: stored.lastModified ?? DEFAULT_META.lastModified,
+    ...resolveBudgetCurrency(stored),
   };
 }
 
@@ -39,6 +39,14 @@ interface UseBudgetMetaReturn {
   setName: (name: string) => Promise<void>;
   setCurrency: (currency: string) => Promise<void>;
   setBudgetFormat: (format: MoneyFormat) => Promise<void>;
+  /** Seed a foreign currency's entry from its curated defaults if it isn't in
+   *  the map yet; a no-op once it exists. Drives persist-when-empty — a used
+   *  currency gets an entry that survives even after the last account on it is
+   *  deleted. */
+  ensureCurrency: (currency: string) => Promise<void>;
+  /** Merge a partial update into a foreign currency's entry (rate + provenance
+   *  or display knobs). Backfills display defaults if the entry is absent. */
+  setCurrencyEntry: (currency: string, update: Partial<CurrencySettings>) => Promise<void>;
   save: (meta: BudgetMeta) => Promise<void>;
 }
 
@@ -58,18 +66,16 @@ export function useBudgetMeta(budgetPath: string): UseBudgetMetaReturn {
   );
 
   const setCurrency = useCallback(
-    (currency: string) => {
-      // Switching currency re-seeds format from the new currency's defaults,
-      // discarding any manual tweaks the user had on the prior currency.
-      const format = formatDefaultsFor(currency);
-      return save((prev) => ({
+    (currency: string) =>
+      // Switching the default currency re-seeds its display from the new
+      // currency's defaults, discarding any manual tweaks the user had on the
+      // prior default.
+      save((prev) => ({
         ...prev,
-        currency,
-        currencyDecimals: format.decimals,
-        currencySymbolPosition: format.symbolPosition,
+        defaultCurrency: currency,
+        currencies: { ...prev.currencies, [currency]: formatDefaultsFor(currency) },
         lastModified: new Date().toISOString(),
-      }));
-    },
+      })),
     [save],
   );
 
@@ -77,12 +83,54 @@ export function useBudgetMeta(budgetPath: string): UseBudgetMetaReturn {
     (format: MoneyFormat) =>
       save((prev) => ({
         ...prev,
-        currencyDecimals: format.decimals,
-        currencySymbolPosition: format.symbolPosition,
+        currencies: {
+          ...prev.currencies,
+          [prev.defaultCurrency]: { ...prev.currencies[prev.defaultCurrency], ...format },
+        },
         lastModified: new Date().toISOString(),
       })),
     [save],
   );
 
-  return { data, isLoading, setName, setCurrency, setBudgetFormat, save };
+  const ensureCurrency = useCallback(
+    (currency: string) =>
+      save((prev) =>
+        prev.currencies[currency]
+          ? prev
+          : {
+              ...prev,
+              currencies: { ...prev.currencies, [currency]: formatDefaultsFor(currency) },
+              lastModified: new Date().toISOString(),
+            },
+      ),
+    [save],
+  );
+
+  const setCurrencyEntry = useCallback(
+    (currency: string, update: Partial<CurrencySettings>) =>
+      save((prev) => ({
+        ...prev,
+        currencies: {
+          ...prev.currencies,
+          [currency]: {
+            ...formatDefaultsFor(currency),
+            ...prev.currencies[currency],
+            ...update,
+          },
+        },
+        lastModified: new Date().toISOString(),
+      })),
+    [save],
+  );
+
+  return {
+    data,
+    isLoading,
+    setName,
+    setCurrency,
+    setBudgetFormat,
+    ensureCurrency,
+    setCurrencyEntry,
+    save,
+  };
 }

@@ -55,7 +55,20 @@ describe("bulkMoveAccount", () => {
     expect(result.find((t) => t.id === "t3")!.accountId).toBe("a2"); // unchanged
   });
 
-  it("skips transfers", () => {
+  it("preserves each moved flow's stamp (a move is same-currency)", () => {
+    // A move only ever lands a flow in a same-currency account, so its amount
+    // and historical rate stay valid — only the account changes.
+    const stamped: Transaction[] = [
+      { ...base, id: "m1", type: "expense", amount: -500, categoryId: "c1", accountId: "a1", fxRate: 90 },
+      { ...base, id: "m2", type: "income", amount: 1000, categoryId: "c2", accountId: "a1" },
+    ];
+    const result = bulkMoveAccount(new Set(["m1", "m2"]), "a3", stamped);
+    expect(result.find((t) => t.id === "m1")!.accountId).toBe("a3");
+    expect(result.find((t) => t.id === "m1")!.fxRate).toBe(90); // historical stamp kept
+    expect(result.find((t) => t.id === "m2")!.fxRate).toBeUndefined(); // unchanged
+  });
+
+  it("skips transfers (account untouched)", () => {
     const result = bulkMoveAccount(new Set(["t4"]), "a3", txns);
     expect(result.find((t) => t.id === "t4")!.accountId).toBe("a1"); // unchanged
   });

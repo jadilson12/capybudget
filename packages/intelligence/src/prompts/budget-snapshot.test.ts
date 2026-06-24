@@ -11,6 +11,7 @@ function account(overrides: Partial<Account> = {}): Account {
     excludeFromNetWorth: false,
     sortOrder: 0,
     createdAt: "2026-01-01T00:00:00Z",
+    currency: "USD",
     ...overrides,
   }
 }
@@ -112,5 +113,28 @@ describe("formatBudgetSnapshot", () => {
   it("says 'none yet' for an empty log", () => {
     const out = formatBudgetSnapshot(buildBudgetSnapshot([], [], [], "USD"))
     expect(out).toContain("Transactions: 0 (none yet)")
+  })
+
+  it("omits the foreign-account section for a single-currency budget", () => {
+    const out = formatBudgetSnapshot(
+      buildBudgetSnapshot([account({ currency: "USD" })], [], [], "USD"),
+    )
+    expect(out).not.toContain("Foreign-currency accounts")
+    expect(out).not.toContain("Aggregate totals")
+  })
+
+  it("lists foreign accounts and the roll-up note when one is non-default", () => {
+    const snap = buildBudgetSnapshot(
+      [account({ name: "Tinkoff", currency: "RUB" }), account({ currency: "USD" })],
+      [],
+      [],
+      "USD",
+    )
+    expect(snap.foreignAccounts).toEqual([{ name: "Tinkoff", currency: "RUB" }])
+
+    const out = formatBudgetSnapshot(snap)
+    expect(out).toContain("Foreign-currency accounts:")
+    expect(out).toContain("  Tinkoff: RUB")
+    expect(out).toContain("default currency (USD)")
   })
 })

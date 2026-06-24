@@ -7,10 +7,10 @@ import { CategorySelector } from "@/components/budget/category-selector";
 import { AccountSelector } from "@/components/budget/account-selector";
 import { MerchantInput } from "@/components/budget/merchant-input";
 import { useAccounts, useCategories, useTransactions } from "@/hooks/use-budget-data";
-import type { Transaction, TransactionType, TransactionFormData } from "@capybudget/core";
-import { findCategoryForMerchant, resolveTransferPair, parseMoney, getToday, parseLocalDate, toDateString } from "@capybudget/core";
+import type { Transaction, TransactionType, TransactionFormData, TransferPair } from "@capybudget/core";
+import { findCategoryForMerchant, resolveTransferPair, parseMoney, getToday, parseLocalDate, toDateString, currencySymbol, crossRateAmount, centsToEditString } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useCurrency, useCurrencies } from "@/contexts/currency-context";
 import { useFormatters } from "@/hooks/use-formatters";
 import { Minus, Plus, ArrowLeftRight, Check, CalendarDays } from "lucide-react";
 
@@ -47,6 +47,29 @@ const TYPE_COLORS: Record<TransactionType, { text: string; pill: string }> = {
   },
 };
 
+/** Seed values for the amount fields when editing, resolved by sign from the
+ *  transfer pair so they never depend on which leg opened the editor.
+ *  `outflowAmount` always seeds the from-leg amount; `inflowAmount` seeds the
+ *  received amount and is non-empty only for a transfer (a non-transfer mirrors
+ *  the from leg and shows no received field). */
+function resolveEditLegs(
+  editing: Transaction | null | undefined,
+  pair: TransferPair | null,
+): { outflowAmount: string; inflowAmount: string } {
+  if (!editing) return { outflowAmount: "", inflowAmount: "" };
+  if (editing.type !== "transfer") {
+    return { outflowAmount: centsToEditString(editing.amount), inflowAmount: "" };
+  }
+
+  const legs = [editing, pair?.pairTransaction].filter(Boolean) as Transaction[];
+  const outflow = legs.find((t) => t.amount < 0) ?? editing;
+  const inflow = legs.find((t) => t.amount > 0) ?? editing;
+  return {
+    outflowAmount: centsToEditString(outflow.amount),
+    inflowAmount: centsToEditString(inflow.amount),
+  };
+}
+
 export function TransactionForm({
   editingTransaction,
   defaultAccountId: defaultAccountIdProp,
@@ -56,7 +79,8 @@ export function TransactionForm({
   onDismiss,
 }: TransactionFormProps) {
   const { t } = useTranslation(["budget", "common"]);
-  const { symbol } = useFormatMoney();
+  const defaultCurrency = useCurrency();
+  const currencies = useCurrencies();
   const { date: formatDate } = useFormatters();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -76,9 +100,16 @@ export function TransactionForm({
   const initialFrom = initialTransfer?.fromAccountId ?? defaultAccountId;
   const initialTo = initialTransfer?.toAccountId ?? "";
 
-  const [amount, setAmount] = useState(() =>
-    editingTransaction ? (Math.abs(editingTransaction.amount) / 100).toFixed(2) : "",
-  );
+  // Both leg magnitudes resolved by sign from the transfer pair, never from
+  // which row opened the editor: `amount` must always seed from the outflow
+  // (from) leg and the received amount from the inflow (to) leg, or editing a
+  // cross-currency transfer from the inflow row writes the inflow magnitude
+  // back onto the from-leg and corrupts it. For a same-currency transfer the
+  // legs are equal; for a non-transfer the inflow magnitude stays empty.
+  const editLegs = resolveEditLegs(editingTransaction, initialTransfer);
+  const [amount, setAmount] = useState(editLegs.outflowAmount);
+  const [toAmount, setToAmount] = useState(editLegs.inflowAmount);
+  const [toAmountEdited, setToAmountEdited] = useState(editLegs.inflowAmount !== "");
   const [type, setType] = useState<TransactionType>(
     editingTransaction?.type ?? "expense",
   );
@@ -105,8 +136,43 @@ export function TransactionForm({
     }
   }
 
+  // Per-leg currencies drive the cross-currency UX: when a transfer's two
+  // accounts hold different currencies, a second "received" amount appears in
+  // the to-account's currency. Everything below collapses to the
+  // single-currency UX when they match — and an all-default budget always
+  // matches, so it never changes.
+  const fromCurrency = accounts.find((a) => a.id === accountId)?.currency ?? defaultCurrency;
+  const toCurrency = accounts.find((a) => a.id === toAccountId)?.currency ?? defaultCurrency;
+  const isCrossCurrency = type === "transfer" && !!toAccountId && fromCurrency !== toCurrency;
+  const fromSymbol = currencySymbol(fromCurrency);
+  const toSymbol = currencySymbol(toCurrency);
+
+  // A plain flow's amount is native to its account's currency, so moving it to a
+  // different-currency account would silently revalue the number. Lock the
+  // selector to same-currency accounts while editing an existing non-transfer
+  // (a transfer legitimately spans currencies; a fresh entry has no amount to
+  // preserve, so any account is valid).
+  const lockCurrency = isEditing && type !== "transfer";
+  const sameCurrencyDisabledIds = lockCurrency
+    ? accounts.filter((a) => a.currency !== fromCurrency).map((a) => a.id)
+    : [];
+
+  // Prefill the received amount from the display cross-rate
+  // rate(from→to) = rate(from→default) / rate(to→default), until the user
+  // overrides it. Reads through the live `amount`, so editing either side
+  // keeps the other in sync while untouched.
+  let displayToAmount = toAmount;
+  if (isCrossCurrency && !toAmountEdited) {
+    const fromCents = parseMoney(amount);
+    displayToAmount = fromCents > 0
+      ? centsToEditString(crossRateAmount(fromCents, fromCurrency, toCurrency, currencies, defaultCurrency))
+      : "";
+  }
+
   function resetForm() {
     setAmount("");
+    setToAmount("");
+    setToAmountEdited(false);
     setType("expense");
     setCategoryId(null);
     setAccountId(defaultAccountId);
@@ -146,6 +212,9 @@ export function TransactionForm({
       categoryId: type === "transfer" ? "" : (categoryId ?? ""),
       accountId,
       toAccountId: type === "transfer" ? toAccountId : undefined,
+      // Only a cross-currency transfer carries an independent received amount;
+      // same-currency transfers mirror the from amount (toAmount stays absent).
+      toAmount: isCrossCurrency ? parseMoney(displayToAmount) : undefined,
       date,
       merchant: type === "transfer" ? "" : merchant.trim(),
       note: note.trim(),
@@ -160,6 +229,15 @@ export function TransactionForm({
     if (parts.length > 2) return;
     if (parts[1] && parts[1].length > 2) return;
     setAmount(cleaned);
+  }
+
+  function handleToAmountChange(raw: string) {
+    const cleaned = raw.replace(/[^0-9.]/g, "");
+    const parts = cleaned.split(".");
+    if (parts.length > 2) return;
+    if (parts[1] && parts[1].length > 2) return;
+    setToAmountEdited(true);
+    setToAmount(cleaned);
   }
 
   const colors = TYPE_COLORS[type];
@@ -204,7 +282,12 @@ export function TransactionForm({
         <div className="flex gap-0.5 rounded-lg bg-muted/50 p-0.5">
           {TYPES.map(({ value, icon: Icon }) => {
             const active = type === value;
-            const locked = isEditing && editingTransaction?.type === "transfer" && value !== "transfer";
+            // Editing can't cross the transfer boundary in either direction — the
+            // legs are paired and a conversion would orphan the partner (spec:
+            // delete and recreate instead). An existing transfer locks to
+            // "transfer"; an existing income/expense locks "transfer" out.
+            const locked =
+              isEditing && (editingTransaction?.type === "transfer") !== (value === "transfer");
             return (
               <button
                 key={value}
@@ -231,8 +314,8 @@ export function TransactionForm({
               is a full-width entry field, so a trailing symbol would float far
               from the left-aligned number. The display formatter still honors
               position everywhere money is rendered read-only. */}
-          {symbol && (
-            <span className={`text-2xl font-bold transition-colors ${colors.text}`}>{symbol}</span>
+          {fromSymbol && (
+            <span className={`text-2xl font-bold transition-colors ${colors.text}`}>{fromSymbol}</span>
           )}
           <input
             ref={amountRef}
@@ -314,6 +397,7 @@ export function TransactionForm({
                 accounts={accounts}
                 value={accountId}
                 onChange={(id) => { setAccountId(id); setAccountError(false); }}
+                disableIds={sameCurrencyDisabledIds}
               />
             </div>
             {accountError && (
@@ -347,6 +431,28 @@ export function TransactionForm({
             <p className="text-xs text-destructive">{accountError && toAccountError ? t("transaction.form.selectBothAccounts") : t("transaction.form.selectAccount")}</p>
           )}
           </div>
+
+          {/* Received amount — only when the two accounts differ in currency.
+              Prefilled from the display cross-rate, fully editable (the user
+              enters what actually landed). */}
+          {isCrossCurrency && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">{t("transaction.form.receivedAmount")}</label>
+              <div className="flex items-baseline gap-0.5">
+                {toSymbol && (
+                  <span className={`text-lg font-semibold ${colors.text}`}>{toSymbol}</span>
+                )}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={displayToAmount}
+                  onChange={(e) => handleToAmountChange(e.target.value)}
+                  placeholder="0.00"
+                  className={`bg-transparent text-lg font-semibold tabular-nums outline-none w-full placeholder:text-muted-foreground/20 ${colors.text}`}
+                />
+              </div>
+            </div>
+          )}
         </>
       )}
 

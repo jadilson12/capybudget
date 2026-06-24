@@ -20,18 +20,40 @@ import {
   createTransaction,
   updateTransaction,
   deleteTransaction,
+  splitTransferLegs,
   bulkAssignCategory,
   bulkMoveAccount,
   bulkChangeDate,
   bulkChangeMerchant,
   formatMoney,
+  stampFxRate,
+  stampTransferRates,
+  crossRateAmount,
+  type Account,
   type AccountType,
+  type CurrencySettings,
   type TransactionType,
 } from "@capybudget/core"
+
+// The inflow magnitude in the destination's currency for a cross-currency
+// transfer when the model didn't supply one — today's display cross-rate, the
+// same convention the form's prefill uses. Same-currency transfers mirror the
+// source amount unchanged.
+function inferToAmount(
+  fromAmount: number,
+  from: Account,
+  to: Account,
+  currencies: Record<string, CurrencySettings>,
+  defaultCurrency: string,
+): number {
+  if (from.currency === to.currency) return fromAmount
+  return crossRateAmount(fromAmount, from.currency, to.currency, currencies, defaultCurrency)
+}
 
 export async function handleCreateTransaction(
   repo: BudgetRepository,
   currency: string,
+  currencies: Record<string, CurrencySettings> | undefined,
   args: Record<string, unknown>,
 ): Promise<string> {
   const type = args.type as TransactionType
@@ -39,17 +61,47 @@ export async function handleCreateTransaction(
     return JSON.stringify({ error: "toAccountId is required for transfers" })
   }
 
+  const accountId = args.accountId as string
+  const amount = args.amount as number
+  const toAccountId = args.toAccountId as string | undefined
+  // Stamp today's rate at entry (same as the UI create path), so AI-created
+  // flows freeze their rate too. A transfer stamps each leg from its own
+  // account's currency, deriving the bank rate from the two amounts when one
+  // side is the default (see stampTransferRates); a plain flow stamps just its
+  // source account's rate.
+  const accounts = await repo.getAccounts()
+  const cur = currencies ?? {}
+  let fxRate: number | undefined
+  let toFxRate: number | undefined
+  let toAmount: number | undefined
+  if (type === "transfer") {
+    const from = accounts.find((a) => a.id === accountId)
+    const to = accounts.find((a) => a.id === toAccountId)
+    if (from && to) {
+      toAmount = (args.toAmount as number | undefined) ?? inferToAmount(amount, from, to, cur, currency)
+      const rates = stampTransferRates(from.currency, to.currency, amount, toAmount, cur, currency)
+      fxRate = rates.fromRate
+      toFxRate = rates.toRate
+    }
+  } else {
+    const account = accounts.find((a) => a.id === accountId)
+    fxRate = account ? stampFxRate(account.currency, cur, currency) : undefined
+  }
+
   const existing = await repo.getTransactions()
   const next = createTransaction(
     {
       type,
-      amount: args.amount as number,
-      accountId: args.accountId as string,
+      amount,
+      accountId,
       categoryId: (args.categoryId as string) ?? "",
-      toAccountId: args.toAccountId as string | undefined,
+      toAccountId,
       date: args.date as string,
       merchant: (args.merchant as string) ?? "",
       note: (args.note as string) ?? "",
+      fxRate,
+      toAmount,
+      toFxRate,
     },
     existing,
   )
@@ -69,6 +121,8 @@ export async function handleCreateTransaction(
 
 export async function handleUpdateTransaction(
   repo: BudgetRepository,
+  currency: string,
+  currencies: Record<string, CurrencySettings> | undefined,
   args: Record<string, unknown>,
 ): Promise<string> {
   const existing = await repo.getTransactions()
@@ -77,27 +131,120 @@ export async function handleUpdateTransaction(
 
   const effectiveType = (args.type as TransactionType) ?? original.type
 
-  // Infer toAccountId from the existing transfer pair if not provided
-  let toAccountId = args.toAccountId as string | undefined
-  if (effectiveType === "transfer" && !toAccountId && original.transferPairId) {
-    const pair = existing.find((t) => t.id === original.transferPairId)
-    if (pair) toAccountId = pair.accountId
+  // A transfer can't be converted to/from a plain flow: the legs are paired and
+  // a cross-boundary change would orphan the partner. The spec mandates delete +
+  // recreate (DATA_MODEL.md, Transfer Architecture).
+  if ((effectiveType === "transfer") !== (original.type === "transfer")) {
+    return JSON.stringify({
+      error: "Cannot change a transaction's type to or from transfer — transfers are paired, so delete this transaction and create a new one of the desired type instead.",
+    })
   }
-  if (effectiveType === "transfer" && !toAccountId) {
-    return JSON.stringify({ error: "toAccountId is required for transfers" })
+
+  if (effectiveType === "transfer") {
+    // `args.id` may target either leg, but core always treats input.id as the
+    // from (outflow) leg and rewrites the inflow as the to leg. Normalize here so
+    // core receives outflow-as-from / inflow-as-to regardless of which leg the
+    // caller targeted — without this, editing the inflow leg flips both legs'
+    // signs/accounts and, cross-currency, writes the inflow magnitude onto the
+    // from leg.
+    const { outflowLeg, inflowLeg } = splitTransferLegs(original, existing)
+
+    // For a transfer, args.accountId/toAccountId name the from/to accounts
+    // directly (not "the targeted leg's account"), so they map cleanly onto the
+    // outflow/inflow legs whichever leg args.id points at.
+    const fromAccountId = (args.accountId as string) ?? outflowLeg?.accountId ?? original.accountId
+    let toAccountId = args.toAccountId as string | undefined
+    if (!toAccountId) toAccountId = inflowLeg?.accountId
+    if (!toAccountId) {
+      return JSON.stringify({ error: "toAccountId is required for transfers" })
+    }
+    const fromAmount = (args.amount as number) ?? Math.abs(outflowLeg?.amount ?? original.amount)
+    const storedToAmount = inflowLeg ? Math.abs(inflowLeg.amount) : undefined
+
+    // A transfer's per-leg amounts and rates are real history — what actually
+    // landed — and must survive an unrelated edit (a note or date change). Carry
+    // the stored legs verbatim, and only re-derive when the transfer's shape
+    // genuinely changed. This predicate keys off whether each arg was *provided*
+    // (the MCP caller omits unchanged fields): an explicit toAmount, a different
+    // from/to account, or a changed from-amount.
+    const shapeChanged =
+      args.toAmount !== undefined ||
+      (args.accountId !== undefined && fromAccountId !== outflowLeg?.accountId) ||
+      (args.toAccountId !== undefined && toAccountId !== inflowLeg?.accountId) ||
+      (args.amount !== undefined && fromAmount !== Math.abs(outflowLeg?.amount ?? fromAmount))
+
+    let fxRate: number | undefined
+    let toFxRate: number | undefined
+    let toAmount: number | undefined
+    if (!shapeChanged && storedToAmount !== undefined) {
+      toAmount = storedToAmount
+      fxRate = outflowLeg?.fxRate
+      toFxRate = inflowLeg?.fxRate
+    } else {
+      const accounts = await repo.getAccounts()
+      const from = accounts.find((a) => a.id === fromAccountId)
+      const to = accounts.find((a) => a.id === toAccountId)
+      if (from && to) {
+        const cur = currencies ?? {}
+        toAmount = (args.toAmount as number | undefined) ?? inferToAmount(fromAmount, from, to, cur, currency)
+        const rates = stampTransferRates(from.currency, to.currency, fromAmount, toAmount, cur, currency)
+        fxRate = rates.fromRate
+        toFxRate = rates.toRate
+      }
+    }
+
+    const next = updateTransaction(
+      {
+        id: outflowLeg?.id ?? (args.id as string),
+        type: effectiveType,
+        amount: fromAmount,
+        accountId: fromAccountId,
+        categoryId: "",
+        toAccountId,
+        date: (args.date as string) ?? original.datetime.slice(0, 10),
+        merchant: "",
+        note: (args.note as string) ?? original.note,
+        fxRate,
+        toAmount,
+        toFxRate,
+      },
+      existing,
+    )
+    await repo.saveTransactions(next)
+    return JSON.stringify({ success: true, id: args.id })
   }
+
+  const accountId = (args.accountId as string) ?? original.accountId
+  const amount = (args.amount as number) ?? Math.abs(original.amount)
+
+  // A plain flow keeps its stamp through an unrelated edit and never re-rates: a
+  // same-account edit and a same-currency move both leave its currency intact, so
+  // the historical stamp still values it. The only move that would change its
+  // currency — a different-currency target — is rejected outright; cross-currency
+  // value movement is what transfers are for.
+  if (accountId !== original.accountId) {
+    const accounts = await repo.getAccounts()
+    const source = accounts.find((a) => a.id === original.accountId)
+    const target = accounts.find((a) => a.id === accountId)
+    if (source && target && source.currency !== target.currency) {
+      return JSON.stringify({
+        error: `Cannot move a ${source.currency} transaction to a ${target.currency} account. Moving keeps the amount native, so it must stay the same currency — create a transfer to move money between currencies.`,
+      })
+    }
+  }
+  const fxRate = original.fxRate
 
   const next = updateTransaction(
     {
       id: args.id as string,
       type: effectiveType,
-      amount: (args.amount as number) ?? Math.abs(original.amount),
-      accountId: (args.accountId as string) ?? original.accountId,
+      amount,
+      accountId,
       categoryId: (args.categoryId as string) ?? original.categoryId,
-      toAccountId,
       date: (args.date as string) ?? original.datetime.slice(0, 10),
       merchant: (args.merchant as string) ?? original.merchant,
       note: (args.note as string) ?? original.note,
+      fxRate,
     },
     existing,
   )
@@ -125,6 +272,8 @@ export async function handleDeleteTransactions(
 
 export async function handleCreateAccount(
   repo: BudgetRepository,
+  currency: string,
+  currencies: Record<string, CurrencySettings> | undefined,
   args: Record<string, unknown>,
 ): Promise<string> {
   const accounts = await repo.getAccounts()
@@ -132,8 +281,10 @@ export async function handleCreateAccount(
     {
       name: args.name as string,
       type: args.type as AccountType,
+      currency: args.currency as string | undefined,
     },
     accounts,
+    currency,
   )
 
   const nextAccounts = [...accounts, account]
@@ -141,10 +292,12 @@ export async function handleCreateAccount(
 
   if (args.openingBalance && (args.openingBalance as number) !== 0) {
     const transactions = await repo.getTransactions()
+    const fxRate = stampFxRate(account.currency, currencies ?? {}, currency)
     const nextTransactions = createOpeningBalanceTransaction(
       account,
       args.openingBalance as number,
       transactions,
+      fxRate,
     )
     await repo.saveTransactions(nextTransactions)
   }
@@ -168,6 +321,12 @@ export async function handleUpdateAccount(
   const existing = accounts.find((a) => a.id === id)
   if (!existing) return JSON.stringify({ error: `Account ${id} not found` })
 
+  const transactions = await repo.getTransactions()
+
+  // No currency arg here by design — the model can rename/retype/archive an
+  // account, but never re-denominate it (its amounts are stored in its
+  // currency). updateAccount only guards a currency *change*, so omitting it is
+  // always allowed; the transaction list satisfies the signature.
   let next = updateAccount(
     {
       id,
@@ -175,13 +334,13 @@ export async function handleUpdateAccount(
       type: (args.type as AccountType) ?? existing.type,
     },
     accounts,
+    transactions,
   )
 
   // archiveAccount throws on a non-zero balance; running it before saving
   // means a rejected archive never persists the name/type/exclusion edits.
   if (typeof args.archived === "boolean") {
     if (args.archived) {
-      const transactions = await repo.getTransactions()
       next = archiveAccount(id, next, transactions)
     } else {
       next = unarchiveAccount(id, next)
@@ -347,11 +506,28 @@ export async function handleBulkUpdateTransactions(
   }
   if (accountId !== undefined) {
     const accounts = await repo.getAccounts()
-    if (!accounts.some((a) => a.id === accountId)) {
+    const target = accounts.find((a) => a.id === accountId)
+    if (!target) {
       return JSON.stringify({
         error: `Invalid accountId "${accountId}". Call list_accounts to see valid IDs.`,
       })
     }
+    // A move keeps each amount native to its currency, so every moved (non-
+    // transfer) flow must already be in the target's currency — reading the
+    // number in a different one would silently revalue it. Reject the whole
+    // call if any moved flow's source account differs in currency.
+    const currencyOf = new Map(accounts.map((a) => [a.id, a.currency]))
+    const mismatch = targeted.find(
+      (t) => t.type !== "transfer" && currencyOf.get(t.accountId) !== target.currency,
+    )
+    if (mismatch) {
+      const from = currencyOf.get(mismatch.accountId)
+      return JSON.stringify({
+        error: `Cannot move a ${from} transaction to a ${target.currency} account. Moving keeps the amount native, so it must stay the same currency — create a transfer to move money between currencies.`,
+      })
+    }
+    // Same currency throughout → each flow's amount and historical stamp stay
+    // valid in the new account; only the account changes.
     transactions = bulkMoveAccount(ids, accountId, transactions)
     counts.accountId = nonTransferTargeted
   }

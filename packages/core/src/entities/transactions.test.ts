@@ -4,6 +4,7 @@ import {
   createTransaction,
   updateTransaction,
   deleteTransaction,
+  splitTransferLegs,
   type TransactionFormData,
 } from "./transactions";
 
@@ -128,6 +129,118 @@ describe("createTransaction", () => {
         expect(leg.note).toBe("monthly savings");
       }
     });
+
+    it("stamps the same rate on both legs (same-currency transfer)", () => {
+      const result = createTransaction({ ...transferInput, fxRate: 0.011 }, []);
+      expect(result[0].fxRate).toBe(0.011);
+      expect(result[1].fxRate).toBe(0.011);
+    });
+
+    it("mirrors the amount on the to leg when toAmount is absent (same-currency)", () => {
+      const result = createTransaction(transferInput, []);
+      expect(result[0].amount).toBe(-25000);
+      expect(result[1].amount).toBe(25000);
+    });
+
+    describe("cross-currency", () => {
+      // $100 (USD, default) → €92 (EUR), the EUR leg carrying its derived bank
+      // rate 100/92, the USD leg empty (1.0).
+      const crossInput: TransactionFormData = {
+        type: "transfer",
+        amount: 10000,
+        categoryId: "",
+        accountId: "acc-usd",
+        toAccountId: "acc-eur",
+        date: "2026-03-05",
+        merchant: "",
+        note: "",
+        toAmount: 9200,
+        fxRate: undefined,
+        toFxRate: 10000 / 9200,
+      };
+
+      it("each leg carries its own native amount", () => {
+        const [from, to] = createTransaction(crossInput, []);
+        expect(from.amount).toBe(-10000);
+        expect(from.accountId).toBe("acc-usd");
+        expect(to.amount).toBe(9200);
+        expect(to.accountId).toBe("acc-eur");
+      });
+
+      it("each leg carries its own stamped rate", () => {
+        const [from, to] = createTransaction(crossInput, []);
+        expect(from.fxRate).toBeUndefined();
+        expect(to.fxRate).toBeCloseTo(10000 / 9200, 12);
+      });
+
+      it("the two legs net to ~0 in the default at the stamped rates", () => {
+        const [from, to] = createTransaction(crossInput, []);
+        const net = from.amount * (from.fxRate ?? 1) + to.amount * (to.fxRate ?? 1);
+        expect(net).toBeCloseTo(0, 6);
+      });
+    });
+  });
+
+  describe("fxRate stamping", () => {
+    const base: TransactionFormData = {
+      type: "expense",
+      amount: 5000,
+      categoryId: "cat-food",
+      accountId: "acc-rub",
+      date: "2026-03-02",
+      merchant: "Pyaterochka",
+      note: "",
+    };
+
+    it("writes the caller's stamped rate onto the created transaction", () => {
+      const [txn] = createTransaction({ ...base, fxRate: 0.011 }, []);
+      expect(txn.fxRate).toBe(0.011);
+    });
+
+    it("leaves fxRate empty when the caller passes none (default-currency = 1.0)", () => {
+      const [txn] = createTransaction(base, []);
+      expect(txn.fxRate).toBeUndefined();
+    });
+  });
+
+  // Default RUB. A cross-currency transfer to IDR with exact-cent amounts (money
+  // is ×100 for every currency, IDR included): 10,000 ₽ out, 1,758,000 IDR in,
+  // the IDR leg stamping the derived rate fromAmount/toAmount.
+  describe("cross-currency transfer (RUB → IDR)", () => {
+    const RUB_OUT = 1_000_000; // 10,000 ₽ in cents
+    const IDR_IN = 175_800_000; // 1,758,000 IDR in cents
+    const IDR_RATE = RUB_OUT / IDR_IN; // ₽ per IDR-unit, derived from the amounts
+
+    const input: TransactionFormData = {
+      type: "transfer",
+      amount: RUB_OUT,
+      categoryId: "",
+      accountId: "acc-rub",
+      toAccountId: "acc-idr",
+      date: "2026-06-01",
+      merchant: "",
+      note: "",
+      toAmount: IDR_IN,
+      fxRate: undefined, // RUB from-leg is the default → empty
+      toFxRate: IDR_RATE,
+    };
+
+    it("from leg is the RUB outflow with no rate; to leg is the IDR inflow with its derived rate", () => {
+      const [from, to] = createTransaction(input, []);
+      expect(from.amount).toBe(-RUB_OUT);
+      expect(from.accountId).toBe("acc-rub");
+      expect(from.fxRate).toBeUndefined();
+      expect(to.amount).toBe(IDR_IN);
+      expect(to.accountId).toBe("acc-idr");
+      expect(to.fxRate).toBe(IDR_RATE);
+    });
+
+    it("the two legs net to exactly 0 ₽ at the stamped rates (no phantom FX)", () => {
+      const [from, to] = createTransaction(input, []);
+      // -1_000_000 ₽ + 175_800_000 IDR-cents × (1_000_000/175_800_000) = 0.
+      const net = from.amount * (from.fxRate ?? 1) + to.amount * (to.fxRate ?? 1);
+      expect(net).toBe(0);
+    });
   });
 });
 
@@ -238,6 +351,78 @@ describe("updateTransaction", () => {
     expect(result[0].datetime).not.toBe("2026-01-15T21:30:45.123");
   });
 
+  // The non-transfer fxRate is applied verbatim from input, exactly as on create
+  // — the caller resolves the rate for the (possibly changed) account. Moving a
+  // transaction to a different-currency account therefore re-rates it correctly,
+  // and a default-currency target clears the stamp. (Regression: the old code
+  // spread the stale txn and never wrote input.fxRate, mis-converting moves 1:1.)
+  describe("non-transfer fxRate re-stamping", () => {
+    it("re-stamps when moved to a different-currency account", () => {
+      // A ₽-default expense (no stamp) moved to a USD account, the caller
+      // resolving USD's rate (90 ₽/USD) and passing it.
+      const existing = [
+        makeTxn({ id: "exp-move", type: "expense", amount: -5000, accountId: "acc-rub", fxRate: undefined }),
+      ];
+      const input: TransactionFormData = {
+        id: "exp-move",
+        type: "expense",
+        amount: 5000,
+        categoryId: "cat-food",
+        accountId: "acc-usd",
+        date: "2026-06-01",
+        merchant: "",
+        note: "",
+        fxRate: 90,
+      };
+      const result = updateTransaction(input, existing);
+      expect(result[0].accountId).toBe("acc-usd");
+      expect(result[0].fxRate).toBe(90);
+    });
+
+    it("clears the stamp when moved to a default-currency account", () => {
+      // A USD-stamped expense moved back to the ₽ default — caller passes none.
+      const existing = [
+        makeTxn({ id: "exp-back", type: "expense", amount: -5000, accountId: "acc-usd", fxRate: 90 }),
+      ];
+      const input: TransactionFormData = {
+        id: "exp-back",
+        type: "expense",
+        amount: 5000,
+        categoryId: "cat-food",
+        accountId: "acc-rub",
+        date: "2026-06-01",
+        merchant: "",
+        note: "",
+        fxRate: undefined,
+      };
+      const result = updateTransaction(input, existing);
+      expect(result[0].accountId).toBe("acc-rub");
+      expect(result[0].fxRate).toBeUndefined();
+    });
+
+    it("preserves a stamp the caller carries through an in-place edit", () => {
+      // Editing amount on a foreign txn that stays on its account: the caller
+      // re-passes the same stamp, so it survives.
+      const existing = [
+        makeTxn({ id: "exp-edit", type: "expense", amount: -5000, accountId: "acc-usd", fxRate: 90 }),
+      ];
+      const input: TransactionFormData = {
+        id: "exp-edit",
+        type: "expense",
+        amount: 7500,
+        categoryId: "cat-food",
+        accountId: "acc-usd",
+        date: "2026-06-01",
+        merchant: "",
+        note: "",
+        fxRate: 90,
+      };
+      const result = updateTransaction(input, existing);
+      expect(result[0].amount).toBe(-7500);
+      expect(result[0].fxRate).toBe(90);
+    });
+  });
+
   describe("transfer update", () => {
     const fromLeg = makeTxn({
       id: "tf-from",
@@ -343,131 +528,119 @@ describe("updateTransaction", () => {
       expect(result[0].merchant).toBe("");
       expect(result[1].merchant).toBe("");
     });
+
+    it("round-trips a cross-currency transfer: independent amounts and re-stamped rates", () => {
+      const crossFrom = makeTxn({
+        id: "xc-from", type: "transfer", amount: -10000, accountId: "acc-usd",
+        transferPairId: "xc-to", merchant: "", categoryId: "", fxRate: undefined,
+      });
+      const crossTo = makeTxn({
+        id: "xc-to", type: "transfer", amount: 9200, accountId: "acc-eur",
+        transferPairId: "xc-from", merchant: "", categoryId: "", fxRate: 10000 / 9200,
+      });
+      // Edit both amounts: $120 → €110, new derived rate 12000/11000.
+      const input: TransactionFormData = {
+        id: "xc-from", type: "transfer", amount: 12000, categoryId: "",
+        accountId: "acc-usd", toAccountId: "acc-eur", date: "2026-05-01",
+        merchant: "", note: "", toAmount: 11000, fxRate: undefined, toFxRate: 12000 / 11000,
+      };
+
+      const result = updateTransaction(input, [crossFrom, crossTo]);
+      const from = result.find((t) => t.id === "xc-from")!;
+      const to = result.find((t) => t.id === "xc-to")!;
+      expect(from.amount).toBe(-12000);
+      expect(from.fxRate).toBeUndefined();
+      expect(to.amount).toBe(11000);
+      expect(to.fxRate).toBeCloseTo(12000 / 11000, 12);
+      // Still nets to ~0 at the re-stamped rates.
+      expect(from.amount * (from.fxRate ?? 1) + to.amount * (to.fxRate ?? 1)).toBeCloseTo(0, 6);
+    });
+
+    it("rewrites both legs of a same-currency transfer from canonical input (to mirrors from, shares rate)", () => {
+      // Both legs USD; the form sends one amount, no toAmount/toFxRate, so the
+      // to leg mirrors the from leg and both carry the one stamped rate.
+      const usdFrom = makeTxn({
+        id: "us-from", type: "transfer", amount: -10000, accountId: "acc-usd-a",
+        transferPairId: "us-to", merchant: "", categoryId: "", fxRate: 90,
+      });
+      const usdTo = makeTxn({
+        id: "us-to", type: "transfer", amount: 10000, accountId: "acc-usd-b",
+        transferPairId: "us-from", merchant: "", categoryId: "", fxRate: 90,
+      });
+      const input: TransactionFormData = {
+        id: "us-from", type: "transfer", amount: 15000, categoryId: "",
+        accountId: "acc-usd-a", toAccountId: "acc-usd-b", date: "2026-06-01",
+        merchant: "", note: "", fxRate: 90, // toAmount/toFxRate absent → mirror
+      };
+      const result = updateTransaction(input, [usdFrom, usdTo]);
+      const from = result.find((t) => t.id === "us-from")!;
+      const to = result.find((t) => t.id === "us-to")!;
+      expect(from.amount).toBe(-15000);
+      expect(to.amount).toBe(15000);
+      expect(from.fxRate).toBe(90);
+      expect(to.fxRate).toBe(90);
+    });
+
+    // Vlad's settle-at-a-different-rate case. A RUB(default) → IDR transfer that
+    // settled for a different IDR amount than first recorded. The form's
+    // canonical input edits ONLY the IDR inflow leg (toAmount + toFxRate); the
+    // RUB from-leg amount and its (empty) rate are pinned. This proves the core
+    // is sound — the corruption Vlad hit was the FORM passing the inflow as the
+    // from `amount`, fixed in a different unit, not here.
+    it("editing only the IDR inflow leaves the RUB from-leg amount untouched", () => {
+      const RUB_OUT = 1_000_000; // 10,000 ₽ in cents — fixed across the edit
+      const IDR_OLD = 175_800_000; // 1,758,000 IDR
+      const IDR_NEW = 180_000_000; // 1,800,000 IDR actually landed
+      const rubFrom = makeTxn({
+        id: "ri-from", type: "transfer", amount: -RUB_OUT, accountId: "acc-rub",
+        transferPairId: "ri-to", merchant: "", categoryId: "", fxRate: undefined,
+      });
+      const idrTo = makeTxn({
+        id: "ri-to", type: "transfer", amount: IDR_OLD, accountId: "acc-idr",
+        transferPairId: "ri-from", merchant: "", categoryId: "",
+        fxRate: RUB_OUT / IDR_OLD,
+      });
+      // Canonical edit: same RUB out, new IDR in, the IDR leg's rate re-derived.
+      const input: TransactionFormData = {
+        id: "ri-from", type: "transfer", amount: RUB_OUT, categoryId: "",
+        accountId: "acc-rub", toAccountId: "acc-idr", date: "2026-06-01",
+        merchant: "", note: "", toAmount: IDR_NEW,
+        fxRate: undefined, toFxRate: RUB_OUT / IDR_NEW,
+      };
+      const result = updateTransaction(input, [rubFrom, idrTo]);
+      const from = result.find((t) => t.id === "ri-from")!;
+      const to = result.find((t) => t.id === "ri-to")!;
+
+      // The RUB from-leg is unchanged: same amount, still no stamp.
+      expect(from.amount).toBe(-RUB_OUT);
+      expect(from.fxRate).toBeUndefined();
+      // Only the IDR leg moved — new amount and new derived rate.
+      expect(to.amount).toBe(IDR_NEW);
+      expect(to.fxRate).toBe(RUB_OUT / IDR_NEW);
+      // Still nets to exactly 0 ₽ at the re-stamped rates.
+      expect(from.amount * (from.fxRate ?? 1) + to.amount * (to.fxRate ?? 1)).toBe(0);
+    });
+  });
+});
+
+describe("splitTransferLegs", () => {
+  const outflow = makeTxn({ id: "out", type: "transfer", amount: -5000, accountId: "acc-a", transferPairId: "in" });
+  const inflow = makeTxn({ id: "in", type: "transfer", amount: 5000, accountId: "acc-b", transferPairId: "out" });
+  const all = [outflow, inflow];
+
+  it("splits by sign regardless of which leg is targeted", () => {
+    expect(splitTransferLegs(outflow, all)).toEqual({ outflowLeg: outflow, inflowLeg: inflow });
+    expect(splitTransferLegs(inflow, all)).toEqual({ outflowLeg: outflow, inflowLeg: inflow });
   });
 
-  describe("unpaired transfer gaining a pair", () => {
-    const orphan = makeTxn({
-      id: "tf-orphan",
-      type: "transfer",
-      amount: -5000,
-      accountId: "acc-checking",
-      transferPairId: "", // no pair
-      merchant: "",
-      categoryId: "",
-    });
+  it("leaves the pair undefined when the partner isn't in the list", () => {
+    expect(splitTransferLegs(outflow, [outflow])).toEqual({ outflowLeg: outflow, inflowLeg: undefined });
+    expect(splitTransferLegs(inflow, [inflow])).toEqual({ outflowLeg: undefined, inflowLeg: inflow });
+  });
 
-    it("creates the missing pair leg when toAccountId is set", () => {
-      const input: TransactionFormData = {
-        id: "tf-orphan",
-        type: "transfer",
-        amount: 5000,
-        categoryId: "",
-        accountId: "acc-checking",
-        toAccountId: "acc-savings",
-        date: "2026-01-15",
-        merchant: "",
-        note: "now paired",
-      };
-
-      const result = updateTransaction(input, [orphan]);
-      expect(result).toHaveLength(2);
-
-      const updated = result.find((t) => t.id === "tf-orphan")!;
-      const newPair = result.find((t) => t.id !== "tf-orphan")!;
-
-      // Original is updated as from-leg (negative amount)
-      expect(updated.amount).toBe(-5000);
-      expect(updated.accountId).toBe("acc-checking");
-      expect(updated.transferPairId).toBe(newPair.id);
-      expect(updated.note).toBe("now paired");
-
-      // New pair is to-leg (positive amount)
-      expect(newPair.amount).toBe(5000);
-      expect(newPair.accountId).toBe("acc-savings");
-      expect(newPair.transferPairId).toBe("tf-orphan");
-      expect(newPair.type).toBe("transfer");
-      expect(newPair.note).toBe("now paired");
-      expect(newPair.merchant).toBe("");
-      expect(newPair.categoryId).toBe("");
-    });
-
-    it("preserves other transactions when creating a pair", () => {
-      const other = makeTxn({ id: "other-txn" });
-      const input: TransactionFormData = {
-        id: "tf-orphan",
-        type: "transfer",
-        amount: 5000,
-        categoryId: "",
-        accountId: "acc-checking",
-        toAccountId: "acc-savings",
-        date: "2026-01-15",
-        merchant: "",
-        note: "",
-      };
-
-      const result = updateTransaction(input, [other, orphan]);
-      expect(result).toHaveLength(3);
-      expect(result[0]).toBe(other); // untouched
-    });
-
-    it("preserves inflow leg role when creating pair for positive-amount orphan", () => {
-      const inflowOrphan = makeTxn({
-        id: "tf-inflow",
-        type: "transfer",
-        amount: 3000, // positive = inflow to this account
-        accountId: "acc-savings",
-        transferPairId: "",
-        merchant: "",
-        categoryId: "",
-      });
-
-      const input: TransactionFormData = {
-        id: "tf-inflow",
-        type: "transfer",
-        amount: 3000,
-        categoryId: "",
-        accountId: "acc-checking", // from
-        toAccountId: "acc-savings", // to (the original account)
-        date: "2026-01-15",
-        merchant: "",
-        note: "",
-      };
-
-      const result = updateTransaction(input, [inflowOrphan]);
-      expect(result).toHaveLength(2);
-
-      const original = result.find((t) => t.id === "tf-inflow")!;
-      const newPair = result.find((t) => t.id !== "tf-inflow")!;
-
-      // Original stays as inflow (positive), keeps its account
-      expect(original.amount).toBe(3000);
-      expect(original.accountId).toBe("acc-savings");
-
-      // New pair is the outflow (negative) from the "from" account
-      expect(newPair.amount).toBe(-3000);
-      expect(newPair.accountId).toBe("acc-checking");
-
-      // Mutually linked
-      expect(original.transferPairId).toBe(newPair.id);
-      expect(newPair.transferPairId).toBe("tf-inflow");
-    });
-
-    it("does not create pair when toAccountId is absent", () => {
-      const input: TransactionFormData = {
-        id: "tf-orphan",
-        type: "transfer",
-        amount: 5000,
-        categoryId: "",
-        accountId: "acc-checking",
-        date: "2026-01-15",
-        merchant: "",
-        note: "still unpaired",
-      };
-
-      const result = updateTransaction(input, [orphan]);
-      expect(result).toHaveLength(1);
-      expect(result[0].transferPairId).toBe("");
-    });
+  it("leaves the pair undefined when there's no transferPairId", () => {
+    const lone = makeTxn({ id: "lone", type: "transfer", amount: -5000, transferPairId: "" });
+    expect(splitTransferLegs(lone, [lone])).toEqual({ outflowLeg: lone, inflowLeg: undefined });
   });
 });
 

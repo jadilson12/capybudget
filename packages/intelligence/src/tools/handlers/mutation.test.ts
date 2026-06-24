@@ -40,7 +40,7 @@ describe("handleCreateTransaction", () => {
   it("creates an expense transaction", async () => {
     const repo = createMockRepo({})
     const result = JSON.parse(
-      await handleCreateTransaction(repo, "USD", {
+      await handleCreateTransaction(repo, "USD", undefined, {
         type: "expense",
         amount: 2500,
         accountId: "acc-1",
@@ -61,7 +61,7 @@ describe("handleCreateTransaction", () => {
   it("creates a transfer with two legs", async () => {
     const repo = createMockRepo({})
     const result = JSON.parse(
-      await handleCreateTransaction(repo, "USD", {
+      await handleCreateTransaction(repo, "USD", undefined, {
         type: "transfer",
         amount: 10000,
         accountId: "acc-1",
@@ -76,10 +76,59 @@ describe("handleCreateTransaction", () => {
     expect(result.created[1].amount).toBe("$100.00")
   })
 
+  it("creates a cross-currency transfer with independent legs and per-leg rates", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-eur", currency: "EUR" }),
+      ],
+    })
+    await handleCreateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, EUR: { decimals: 2, symbolPosition: "before" } },
+      {
+        type: "transfer",
+        amount: 10000,
+        accountId: "acc-usd",
+        toAccountId: "acc-eur",
+        toAmount: 9200,
+        date: "2026-03-14",
+      },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const from = saved.find((t) => t.accountId === "acc-usd")!
+    const to = saved.find((t) => t.accountId === "acc-eur")!
+    expect(from.amount).toBe(-10000)
+    expect(from.fxRate).toBeUndefined() // default leg
+    expect(to.amount).toBe(9200)
+    expect(to.fxRate).toBeCloseTo(10000 / 9200, 12) // derived bank rate
+  })
+
+  it("infers the received amount from today's rate when toAmount is omitted", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-eur", currency: "EUR" }),
+      ],
+    })
+    await handleCreateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, EUR: { decimals: 2, symbolPosition: "before" } },
+      { type: "transfer", amount: 10000, accountId: "acc-usd", toAccountId: "acc-eur", date: "2026-03-14" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const to = saved.find((t) => t.accountId === "acc-eur")!
+    // rate(USD→EUR) = 1 / (1/0.92) = 0.92, so $100 → €92.
+    expect(to.amount).toBe(9200)
+    expect(to.fxRate).toBeCloseTo(10000 / 9200, 10)
+  })
+
   it("creates income with positive amount", async () => {
     const repo = createMockRepo({})
     const result = JSON.parse(
-      await handleCreateTransaction(repo, "USD", {
+      await handleCreateTransaction(repo, "USD", undefined, {
         type: "income",
         amount: 500000,
         accountId: "acc-1",
@@ -91,6 +140,35 @@ describe("handleCreateTransaction", () => {
 
     expect(result.created[0].amount).toBe("$5,000.00")
   })
+
+  it("stamps today's rate on a transaction created for a foreign account", async () => {
+    const repo = createMockRepo({
+      accounts: [makeAccount({ id: "acc-rub", currency: "RUB" })],
+    })
+    await handleCreateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, RUB: { decimals: 0, symbolPosition: "after" } },
+      { type: "expense", amount: 500000, accountId: "acc-rub", categoryId: "cat-1", date: "2026-03-14" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    // RUB→USD via the seed table (1/91), frozen on the transaction.
+    expect(saved[0].fxRate).toBeCloseTo(1 / 91, 10)
+  })
+
+  it("leaves fxRate empty for a default-currency account", async () => {
+    const repo = createMockRepo({
+      accounts: [makeAccount({ id: "acc-usd", currency: "USD" })],
+    })
+    await handleCreateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" } },
+      { type: "expense", amount: 2500, accountId: "acc-usd", categoryId: "cat-1", date: "2026-03-14" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    expect(saved[0].fxRate).toBeUndefined()
+  })
 })
 
 describe("handleUpdateTransaction", () => {
@@ -99,7 +177,7 @@ describe("handleUpdateTransaction", () => {
       transactions: [makeTxn({ id: "txn-1", amount: -5000, merchant: "Old" })],
     })
     const result = JSON.parse(
-      await handleUpdateTransaction(repo, {
+      await handleUpdateTransaction(repo, "USD", undefined, {
         id: "txn-1",
         merchant: "New Merchant",
         amount: 7500,
@@ -115,9 +193,225 @@ describe("handleUpdateTransaction", () => {
   it("returns error for missing transaction", async () => {
     const repo = createMockRepo({})
     const result = JSON.parse(
-      await handleUpdateTransaction(repo, { id: "nonexistent" }),
+      await handleUpdateTransaction(repo, "USD", undefined, { id: "nonexistent" }),
     )
     expect(result.error).toMatch(/not found/)
+  })
+
+  it("leaves both legs of a cross-currency transfer untouched on an unrelated edit", async () => {
+    // Executed at €90-for-$100 (toFxRate 10000/9000 ≈ 1.111), worse than today's
+    // seed (1/0.92 ≈ 1.087). A note-only edit must NOT re-rate to today's rate —
+    // the received amount and its derived rate are real history.
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-eur", currency: "EUR" }),
+      ],
+      transactions: [
+        makeTxn({ id: "xc-from", type: "transfer", amount: -10000, accountId: "acc-usd", transferPairId: "xc-to", fxRate: undefined }),
+        makeTxn({ id: "xc-to", type: "transfer", amount: 9000, accountId: "acc-eur", transferPairId: "xc-from", fxRate: 10000 / 9000 }),
+      ],
+    })
+    await handleUpdateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, EUR: { decimals: 2, symbolPosition: "before" } },
+      { id: "xc-from", note: "vacation cash" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const from = saved.find((t) => t.id === "xc-from")!
+    const to = saved.find((t) => t.id === "xc-to")!
+    expect(from.amount).toBe(-10000)
+    expect(from.fxRate).toBeUndefined()
+    expect(to.amount).toBe(9000) // stored received amount preserved, not re-inferred
+    expect(to.fxRate).toBeCloseTo(10000 / 9000, 12) // real executed rate, not today's
+    expect(to.note).toBe("vacation cash")
+  })
+
+  it("preserves a plain flow's stamp on an amount/merchant edit when the account is unchanged", async () => {
+    // RUB account, stamped the day it happened at a rate deliberately off today's
+    // seed (1/91). An amount + merchant edit must carry that historical stamp.
+    const repo = createMockRepo({
+      accounts: [makeAccount({ id: "acc-rub", currency: "RUB" })],
+      transactions: [
+        makeTxn({ id: "t1", amount: -100000, accountId: "acc-rub", merchant: "Old", fxRate: 1 / 80 }),
+      ],
+    })
+    await handleUpdateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, RUB: { decimals: 0, symbolPosition: "after" } },
+      { id: "t1", amount: 1500, merchant: "New" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const t = saved.find((x) => x.id === "t1")!
+    expect(t.merchant).toBe("New")
+    expect(t.amount).toBe(-1500)
+    expect(t.fxRate).toBe(1 / 80) // historical stamp, not re-rated to today's seed
+  })
+
+  it("rejects moving a plain flow to a different-currency account", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-rub", currency: "RUB" }),
+      ],
+      transactions: [makeTxn({ id: "t1", amount: -5000, accountId: "acc-usd", fxRate: undefined })],
+    })
+    const result = JSON.parse(
+      await handleUpdateTransaction(
+        repo,
+        "USD",
+        { USD: { decimals: 2, symbolPosition: "before" }, RUB: { decimals: 0, symbolPosition: "after" } },
+        { id: "t1", accountId: "acc-rub" },
+      ),
+    )
+    expect(result.error).toMatch(/same currency|transfer/i)
+    expect(repo.saveTransactions).not.toHaveBeenCalled()
+  })
+
+  it("preserves a plain flow's stamp when moved between same-currency accounts", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-usd2", currency: "USD" }),
+      ],
+      transactions: [makeTxn({ id: "t1", amount: -5000, accountId: "acc-usd", fxRate: 1 / 91 })],
+    })
+    await handleUpdateTransaction(
+      repo,
+      "RUB",
+      { RUB: { decimals: 0, symbolPosition: "after" }, USD: { decimals: 2, symbolPosition: "before" } },
+      { id: "t1", accountId: "acc-usd2" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const t = saved.find((x) => x.id === "t1")!
+    expect(t.accountId).toBe("acc-usd2")
+    expect(t.fxRate).toBe(1 / 91) // historical stamp, not re-resolved to today's
+  })
+
+  it("re-derives both legs when the from-amount of a cross-currency transfer changes", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-eur", currency: "EUR" }),
+      ],
+      transactions: [
+        makeTxn({ id: "xc-from", type: "transfer", amount: -10000, accountId: "acc-usd", transferPairId: "xc-to", fxRate: undefined }),
+        makeTxn({ id: "xc-to", type: "transfer", amount: 9000, accountId: "acc-eur", transferPairId: "xc-from", fxRate: 10000 / 9000 }),
+      ],
+    })
+    // Change the from-amount to $200 with no explicit toAmount → infer at today's
+    // rate (0.92) → €184, and re-derive the to-leg rate from the two amounts.
+    await handleUpdateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, EUR: { decimals: 2, symbolPosition: "before" } },
+      { id: "xc-from", type: "transfer", amount: 20000, accountId: "acc-usd", toAccountId: "acc-eur" },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const to = saved.find((t) => t.id === "xc-to")!
+    expect(to.amount).toBe(18400) // $200 at today's 0.92
+    expect(to.fxRate).toBeCloseTo(20000 / 18400, 12)
+  })
+
+  it("mirrors the amount and shares one rate across both legs of a same-currency transfer edit", async () => {
+    // RUB → RUB: an amount edit re-derives the shape, but a same-currency
+    // transfer takes the one resolver rate on both legs (no cross-rate from the
+    // amounts) and mirrors the from-amount onto the to leg.
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-rub1", currency: "RUB" }),
+        makeAccount({ id: "acc-rub2", currency: "RUB" }),
+      ],
+      transactions: [
+        makeTxn({ id: "rr-from", type: "transfer", amount: -500000, accountId: "acc-rub1", transferPairId: "rr-to", fxRate: 1 / 80 }),
+        makeTxn({ id: "rr-to", type: "transfer", amount: 500000, accountId: "acc-rub2", transferPairId: "rr-from", fxRate: 1 / 80 }),
+      ],
+    })
+    await handleUpdateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, RUB: { decimals: 0, symbolPosition: "after" } },
+      { id: "rr-from", amount: 700000 },
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const from = saved.find((t) => t.id === "rr-from")!
+    const to = saved.find((t) => t.id === "rr-to")!
+    expect(from.amount).toBe(-700000)
+    expect(to.amount).toBe(700000) // mirrored, not cross-rated
+    // Both legs share the resolver rate (RUB→USD seed 1/91), re-derived from the
+    // edit — not the old 1/80 stamp, and not a rate split from the two amounts.
+    expect(from.fxRate).toBeCloseTo(1 / 91, 12)
+    expect(to.fxRate).toBeCloseTo(1 / 91, 12)
+    expect(to.fxRate).toBe(from.fxRate) // same-currency → both legs the same rate
+  })
+
+  it("leaves both legs untouched when a note-only edit targets the INFLOW leg of a cross-currency transfer", async () => {
+    // The model can target either leg. A note-only edit on the inflow (positive)
+    // leg must normalize to outflow-as-from / inflow-as-to before core sees it —
+    // otherwise core writes the inflow account/magnitude onto the from leg and
+    // corrupts the pair. RUB out → USD in.
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-rub", currency: "RUB" }),
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+      ],
+      transactions: [
+        makeTxn({ id: "rub-from", type: "transfer", amount: -900000, accountId: "acc-rub", transferPairId: "usd-to", fxRate: 1 / 90 }),
+        makeTxn({ id: "usd-to", type: "transfer", amount: 10000, accountId: "acc-usd", transferPairId: "rub-from", fxRate: undefined }),
+      ],
+    })
+    await handleUpdateTransaction(
+      repo,
+      "USD",
+      { USD: { decimals: 2, symbolPosition: "before" }, RUB: { decimals: 0, symbolPosition: "after" } },
+      { id: "usd-to", note: "moving day" }, // targets the inflow leg
+    )
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0] as Transaction[]
+    const from = saved.find((t) => t.id === "rub-from")!
+    const to = saved.find((t) => t.id === "usd-to")!
+    // Both legs' amounts, accounts, and rates are byte-identical — only the note moved.
+    expect(from.amount).toBe(-900000)
+    expect(from.accountId).toBe("acc-rub")
+    expect(from.fxRate).toBe(1 / 90)
+    expect(to.amount).toBe(10000)
+    expect(to.accountId).toBe("acc-usd")
+    expect(to.fxRate).toBeUndefined()
+    expect(from.note).toBe("moving day")
+    expect(to.note).toBe("moving day")
+  })
+
+  it("rejects converting a plain flow to a transfer", async () => {
+    const repo = createMockRepo({
+      transactions: [makeTxn({ id: "exp-1", type: "expense", amount: -5000, accountId: "acc-1" })],
+    })
+    const result = JSON.parse(
+      await handleUpdateTransaction(repo, "USD", undefined, {
+        id: "exp-1",
+        type: "transfer",
+        toAccountId: "acc-2",
+      }),
+    )
+    expect(result.error).toMatch(/delete .* create|to or from transfer/i)
+    expect(repo.saveTransactions).not.toHaveBeenCalled()
+  })
+
+  it("rejects converting a transfer to a plain flow", async () => {
+    const repo = createMockRepo({
+      transactions: [
+        makeTxn({ id: "tf-from", type: "transfer", amount: -5000, accountId: "acc-1", transferPairId: "tf-to" }),
+        makeTxn({ id: "tf-to", type: "transfer", amount: 5000, accountId: "acc-2", transferPairId: "tf-from" }),
+      ],
+    })
+    const result = JSON.parse(
+      await handleUpdateTransaction(repo, "USD", undefined, {
+        id: "tf-from",
+        type: "expense",
+      }),
+    )
+    expect(result.error).toMatch(/delete .* create|to or from transfer/i)
+    expect(repo.saveTransactions).not.toHaveBeenCalled()
   })
 })
 
@@ -162,10 +456,10 @@ describe("handleDeleteTransactions", () => {
 // ── Accounts ────────────────────────────────────────────────────
 
 describe("handleCreateAccount", () => {
-  it("creates an account", async () => {
+  it("creates an account in the budget default currency", async () => {
     const repo = createMockRepo({})
     const result = JSON.parse(
-      await handleCreateAccount(repo, {
+      await handleCreateAccount(repo, "EUR", undefined, {
         name: "Savings",
         type: "savings",
       }),
@@ -175,11 +469,13 @@ describe("handleCreateAccount", () => {
     expect(result.account.name).toBe("Savings")
     expect(result.account.type).toBe("savings")
     expect(repo.saveAccounts).toHaveBeenCalledOnce()
+    const saved = (repo.saveAccounts as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(saved[0].currency).toBe("EUR")
   })
 
   it("creates opening balance transaction when provided", async () => {
     const repo = createMockRepo({})
-    await handleCreateAccount(repo, {
+    await handleCreateAccount(repo, "USD", undefined, {
       name: "Checking",
       type: "checking",
       openingBalance: 50000,
@@ -191,7 +487,7 @@ describe("handleCreateAccount", () => {
 
   it("skips opening balance when zero", async () => {
     const repo = createMockRepo({})
-    await handleCreateAccount(repo, {
+    await handleCreateAccount(repo, "USD", undefined, {
       name: "Checking",
       type: "checking",
       openingBalance: 0,
@@ -515,6 +811,50 @@ describe("handleBulkUpdateTransactions", () => {
     expect(saved.find((t: Transaction) => t.id === "t1").accountId).toBe("acc-2")
     expect(saved.find((t: Transaction) => t.id === "t2").accountId).toBe("acc-2")
     expect(saved.find((t: Transaction) => t.id === "t3").accountId).toBe("acc-1") // transfer untouched
+  })
+
+  it("rejects a bulk move when any flow's currency differs from the target", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-rub", currency: "RUB" }),
+      ],
+      transactions: [
+        makeTxn({ id: "t1", accountId: "acc-usd" }),
+        makeTxn({ id: "t2", accountId: "acc-rub" }),
+      ],
+    })
+    const result = JSON.parse(
+      await handleBulkUpdateTransactions(repo, {
+        transactionIds: ["t1", "t2"],
+        set: { accountId: "acc-rub" }, // t1 is USD → mismatch
+      }),
+    )
+    expect(result.error).toMatch(/same currency|transfer/i)
+    expect(repo.saveTransactions).not.toHaveBeenCalled()
+  })
+
+  it("preserves every stamp on a same-currency bulk move", async () => {
+    const repo = createMockRepo({
+      accounts: [
+        makeAccount({ id: "acc-usd", currency: "USD" }),
+        makeAccount({ id: "acc-usd2", currency: "USD" }),
+      ],
+      transactions: [
+        makeTxn({ id: "t1", accountId: "acc-usd", fxRate: 1 / 91 }),
+        makeTxn({ id: "t2", accountId: "acc-usd", fxRate: 1 / 90 }),
+      ],
+    })
+    const result = JSON.parse(
+      await handleBulkUpdateTransactions(repo, {
+        transactionIds: ["t1", "t2"],
+        set: { accountId: "acc-usd2" },
+      }),
+    )
+    expect(result.success).toBe(true)
+    const saved = (repo.saveTransactions as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(saved.find((t: Transaction) => t.id === "t1").fxRate).toBe(1 / 91) // each kept
+    expect(saved.find((t: Transaction) => t.id === "t2").fxRate).toBe(1 / 90)
   })
 
   it("changes date and preserves time-of-day", async () => {

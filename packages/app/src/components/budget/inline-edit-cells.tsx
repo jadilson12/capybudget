@@ -8,7 +8,7 @@ import type { Account, Category, Transaction, TransactionFormData } from "@capyb
 import { parseMoney, getAmountClass, centsToEditString, parseLocalDate, toDateString, findCategoryForMerchant } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useTransactions } from "@/hooks/use-budget-data";
-import { useFormatMoney } from "@/contexts/currency-context";
+import { useAccountSymbol } from "@/contexts/currency-context";
 import { useFormatters } from "@/hooks/use-formatters";
 import { CalendarDays } from "lucide-react";
 
@@ -91,7 +91,8 @@ export function InlineEditCell({
     }} onCancel={onCancel} /></div>;
   }
   // amount
-  return <div onClick={stop}><AmountEditCell txn={txn} onSave={(amount) => buildFormData({ amount })} onCancel={onCancel} /></div>;
+  const accountCurrency = accounts.find((a) => a.id === txn.accountId)?.currency;
+  return <div onClick={stop}><AmountEditCell txn={txn} currency={accountCurrency} onSave={(amount) => buildFormData({ amount })} onCancel={onCancel} /></div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,11 +139,17 @@ function AccountEditCell({ txn, accounts, onSave, onCancel }: {
   txn: Transaction; accounts: Account[];
   onSave: (accountId: string) => void; onCancel: () => void;
 }) {
+  // Only non-transfers reach the inline editor (a transfer cell opens the full
+  // form). A flow's amount is native to its account's currency, so a move must
+  // stay same-currency — disable different-currency targets.
+  const currency = accounts.find((a) => a.id === txn.accountId)?.currency;
+  const disableIds = accounts.filter((a) => a.currency !== currency).map((a) => a.id);
   return (
     <AccountSelector
       accounts={accounts}
       value={txn.accountId}
       defaultOpen
+      disableIds={disableIds}
       onChange={(id) => onSave(id)}
       onOpenChange={(open) => { if (!open) onCancel(); }}
     />
@@ -196,11 +203,12 @@ function MerchantEditCell({ txn, onSave, onCancel }: {
   );
 }
 
-function AmountEditCell({ txn, onSave, onCancel }: {
+function AmountEditCell({ txn, currency, onSave, onCancel }: {
   txn: Transaction;
+  currency?: string;
   onSave: (amount: number) => void; onCancel: () => void;
 }) {
-  const { symbol, symbolPosition } = useFormatMoney();
+  const { symbol, symbolPosition } = useAccountSymbol(currency);
   const [value, setValue] = useState(() => centsToEditString(txn.amount));
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);

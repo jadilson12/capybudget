@@ -1,4 +1,4 @@
-import type { SymbolPosition } from "../utils/money";
+import type { CurrencySettings } from "../utils/money";
 
 /** The comparison bases the Monthly Budget tab can average implicit targets
  *  over. Source of truth for both the `BudgetBasis` type and the runtime
@@ -30,9 +30,13 @@ export const BASIS_OPTION_LABELS: Record<BudgetBasis, string> = {
 export interface BudgetMeta {
   schemaVersion: number;
   name: string;
-  currency: string;
-  currencyDecimals: number;
-  currencySymbolPosition: SymbolPosition;
+  /** The code every roll-up converts into and the value an account or
+   *  transaction takes when it carries none of its own. */
+  defaultCurrency: string;
+  /** Per-currency settings keyed by ISO code. The default currency is an entry
+   *  of the same shape (display knobs, no rate); non-default entries add the
+   *  rate against the default. */
+  currencies: Record<string, CurrencySettings>;
   createdAt: string;
   lastModified: string;
 }
@@ -61,6 +65,9 @@ export interface Account {
   excludeFromNetWorth: boolean;
   sortOrder: number;
   createdAt: string;
+  /** ISO currency code the account holds. Balances in the default currency
+   *  convert as the identity. Locked once the account has any transaction. */
+  currency: string;
 }
 
 export type CategoryGroup =
@@ -94,4 +101,7 @@ export interface Transaction {
   merchant: string;
   note: string;
   createdAt: string;
+  /** Native→default rate stamped the day a foreign transaction happened, so
+   *  flows never re-rate. Absent → 1.0 (a default-currency transaction). */
+  fxRate?: number;
 }

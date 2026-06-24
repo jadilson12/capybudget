@@ -1,14 +1,18 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  ensureMinMonths,
   filterTransactionsByDateRange,
+  getNetWorthBreakdown,
   getPeriodSummary,
 } from "@capybudget/core";
 import type { DateRange } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
+import { useConverter, useCurrency } from "@/contexts/currency-context";
 import { useTransactions, useCategories, useAccounts } from "@/hooks/use-budget-data";
 import { useAnalyticsStore, type PeriodType, type TabId } from "@/stores/analytics-store";
 import { DateRangeNav } from "./date-range-nav";
 import { SummaryStrip } from "./summary-strip";
+import { computeIncludedIds } from "./net-worth-account-filter-utils";
 import { SpendingTab } from "./spending-tab";
 import { NetWorthTab } from "./net-worth-tab";
 import { CashFlowTab } from "./cash-flow-tab";
@@ -38,9 +42,12 @@ export function AnalyticsView() {
   const { data: transactions = [] } = useTransactions();
   const { data: categories = [] } = useCategories();
   const { data: accounts = [] } = useAccounts();
+  const converter = useConverter();
+  const defaultCurrency = useCurrency();
 
   // Per-tab store
   const activeTab = useAnalyticsStore((s) => s.activeTab);
+  const netWorthExcludedIds = useAnalyticsStore((s) => s.netWorthExcludedIds);
   const tabState = useAnalyticsStore((s) => s.tabs[s.activeTab]);
   const setActiveTab = useAnalyticsStore((s) => s.setActiveTab);
   const setPeriod = useAnalyticsStore((s) => s.setPeriod);
@@ -73,7 +80,40 @@ export function AnalyticsView() {
   );
 
   // Summary
-  const summary = useMemo(() => getPeriodSummary(filtered), [filtered]);
+  const summary = useMemo(() => getPeriodSummary(filtered, converter), [filtered, converter]);
+
+  // Net-worth unrealized FX, shown as a 4th summary stat on that tab only. Its
+  // cost basis must equal the chart's endpoint, so it's computed with the same
+  // include-set and the same window: range clamped to ≥12 months, transactions
+  // valued up to the window end. Then `current value (spot) = cost basis (chart
+  // endpoint) + unrealized FX` reads true. Spot is a today's-rate number, so the
+  // stat is only honest while the window reaches the present — a historical range
+  // hides it (`rangeIsCurrent`), as does a USD-only budget (`hasForeignAccount`).
+  const includedAccounts = useMemo(() => {
+    const includedIds = computeIncludedIds(accounts, netWorthExcludedIds);
+    return accounts.filter((a) => includedIds.has(a.id));
+  }, [accounts, netWorthExcludedIds]);
+  const chartRange = useMemo(() => ensureMinMonths(dateRange, 12), [dateRange]);
+  const hasForeignAccount = includedAccounts.some((a) => a.currency !== defaultCurrency);
+  // Captured once at mount: a stable "now" keeps the render pure, and the gate is
+  // month-coarse so mount-time drift never matters.
+  const [now] = useState(() => Date.now());
+  const rangeIsCurrent = chartRange.end.getTime() > now;
+  // Only the net-worth tab shows this, so skip the over-all-transactions
+  // breakdown entirely on other tabs — otherwise scrubbing dates anywhere
+  // recomputes it for nothing.
+  const fxBreakdown = useMemo(
+    () =>
+      activeTab === "netWorth"
+        ? getNetWorthBreakdown(
+            includedAccounts,
+            transactions.filter((t) => new Date(t.datetime).getTime() < chartRange.end.getTime()),
+            converter,
+          )
+        : null,
+    [activeTab, includedAccounts, transactions, chartRange, converter],
+  );
+  const fx = fxBreakdown && hasForeignAccount && rangeIsCurrent ? fxBreakdown : null;
 
   // Current tab definition
   const currentTab = TABS.find((t) => t.id === activeTab) ?? TABS[0];
@@ -129,7 +169,7 @@ export function AnalyticsView() {
           onCustomRange={handleCustomRange}
           dataBounds={dataBounds}
         />
-        {activeTab !== "monthlyBudget" && <SummaryStrip summary={summary} />}
+        {activeTab !== "monthlyBudget" && <SummaryStrip summary={summary} fx={fx} />}
       </div>
 
       {/* Monthly Budget pads itself so its sticky header pins flush; every

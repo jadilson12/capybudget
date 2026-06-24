@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { makeAccount } from "@capybudget/core/test-factories";
 import { prepareMerge } from "./import-merge";
+import { resolveRate } from "../utils/rates";
+import { createConverter } from "../analytics/converter";
 import type { ImportTransaction } from "./import-types";
 import type { Transaction } from "../entities/types";
+import type { CurrencySettings } from "../utils/money";
+
+const fmt = (): CurrencySettings => ({ decimals: 2, symbolPosition: "before" });
 
 function makeImportTxn(overrides: Partial<ImportTransaction> = {}): ImportTransaction {
   return {
@@ -32,6 +37,7 @@ describe("prepareMerge", () => {
         { transactions: [txn], selectedIds: new Set(), accountMapping: {} },
         [],
         [],
+        "USD",
       ),
     ).toThrow("No transactions selected");
   });
@@ -42,6 +48,7 @@ describe("prepareMerge", () => {
       { transactions: [txn], selectedIds: new Set([txn.id]), accountMapping: {} },
       [],
       [],
+      "USD",
     );
 
     expect(result.sourcesToCreate).toEqual(["Chase Checking"]);
@@ -60,6 +67,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.sourcesToCreate).toEqual(["Amex Gold"]);
@@ -79,6 +87,7 @@ describe("prepareMerge", () => {
       },
       [existingAcct],
       [],
+      "USD",
     );
 
     expect(result.sourcesToCreate).toEqual([]);
@@ -100,6 +109,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.transactions[0].accountId).toBe("acct-fallback");
@@ -117,6 +127,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.sourcesToCreate).toEqual(["Chase Checking"]);
@@ -136,6 +147,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.transactions[0].note).toBe("GROCERY STORE #123");
@@ -152,6 +164,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.transactions[0].note).toBe("");
@@ -174,6 +187,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     const out = result.transactions[0];
@@ -210,6 +224,7 @@ describe("prepareMerge", () => {
       },
       [],
       [existingTxn],
+      "USD",
     );
 
     expect(result.transactions).toHaveLength(2);
@@ -228,6 +243,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.transactions).toHaveLength(1);
@@ -245,6 +261,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     const createdId = result.createdAccountIds["New Bank"];
@@ -262,6 +279,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.aliases.accounts["Chase"]).toBe("acct-existing");
@@ -278,6 +296,8 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
+      {},
       { accounts: { "Old Bank": "acct-old" } },
     );
 
@@ -297,6 +317,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.aliases.accounts["Chase"]).toBe("acct-1");
@@ -314,6 +335,7 @@ describe("prepareMerge", () => {
       },
       [],
       [],
+      "USD",
     );
 
     expect(result.transactions[0].categoryId).toBe("");
@@ -343,6 +365,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       const [out, inTxn] = result.transactions;
@@ -378,6 +401,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       const [out1, in1, out2] = result.transactions;
@@ -410,6 +434,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       const [a1, a2, b1, b2] = result.transactions;
@@ -435,6 +460,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions[0].transferPairId).toBe("");
@@ -457,6 +483,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions[0].transferPairId).toBe("");
@@ -479,6 +506,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions[0].transferPairId).toBe("");
@@ -501,6 +529,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions[0].transferPairId).toBe("");
@@ -526,6 +555,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       // Should create two transactions (the pair)
@@ -564,6 +594,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions).toHaveLength(2);
@@ -600,6 +631,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       for (const t of result.transactions) {
@@ -625,6 +657,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       for (const t of result.transactions) {
@@ -652,6 +685,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions).toHaveLength(1);
@@ -677,6 +711,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       expect(result.transactions).toHaveLength(1);
@@ -716,6 +751,7 @@ describe("prepareMerge", () => {
         },
         [],
         [],
+      "USD",
       );
 
       // 2 from single-leg pair + 2 from YNAB pair = 4
@@ -742,6 +778,147 @@ describe("prepareMerge", () => {
       expect(ynabPair).toHaveLength(2);
       expect(ynabPair[0].transferPairId).toBe(ynabPair[1].id);
       expect(ynabPair[1].transferPairId).toBe(ynabPair[0].id);
+    });
+  });
+
+  describe("fxRate stamping (multi-currency)", () => {
+    const currencies = { USD: fmt(), RUB: fmt() };
+
+    it("stamps today's rate when a row lands on an existing foreign account", () => {
+      const rubAccount = makeAccount({ id: "acct-rub", currency: "RUB" });
+      const txn = makeImportTxn({
+        sourceAccount: "Tinkoff",
+        amount: 10_000_000, // 100,000.00 ₽
+        type: "income",
+      });
+
+      const result = prepareMerge(
+        {
+          transactions: [txn],
+          selectedIds: new Set([txn.id]),
+          accountMapping: { Tinkoff: "acct-rub" },
+        },
+        [rubAccount],
+        [],
+        "USD",
+        currencies,
+      );
+
+      const expected = resolveRate("RUB", currencies, "USD").rate;
+      expect(result.transactions[0].fxRate).toBe(expected);
+    });
+
+    it("leaves fxRate empty for a row landing on a default-currency account", () => {
+      const usdAccount = makeAccount({ id: "acct-usd", currency: "USD" });
+      const txn = makeImportTxn({ sourceAccount: "Chase", amount: -2500 });
+
+      const result = prepareMerge(
+        {
+          transactions: [txn],
+          selectedIds: new Set([txn.id]),
+          accountMapping: { Chase: "acct-usd" },
+        },
+        [usdAccount],
+        [],
+        "USD",
+        currencies,
+      );
+
+      expect(result.transactions[0].fxRate).toBeUndefined();
+    });
+
+    it("leaves fxRate empty on auto-created (default-currency) accounts", () => {
+      const txn = makeImportTxn({ sourceAccount: "New Bank", amount: -2500 });
+
+      const result = prepareMerge(
+        { transactions: [txn], selectedIds: new Set([txn.id]), accountMapping: {} },
+        [],
+        [],
+        "USD",
+        currencies,
+      );
+
+      expect(result.transactions[0].fxRate).toBeUndefined();
+    });
+
+    it("merged total matches the preview total for a foreign import", () => {
+      const rubAccount = makeAccount({ id: "acct-rub", currency: "RUB" });
+      const txns = [
+        makeImportTxn({ sourceAccount: "Tinkoff", amount: 10_000_000, type: "income" }),
+        makeImportTxn({ sourceAccount: "Tinkoff", amount: -345_600, type: "expense" }),
+      ];
+
+      const result = prepareMerge(
+        {
+          transactions: txns,
+          selectedIds: new Set(txns.map((t) => t.id)),
+          accountMapping: { Tinkoff: "acct-rub" },
+        },
+        [rubAccount],
+        [],
+        "USD",
+        currencies,
+      );
+
+      const todayRates = new Map([["RUB", resolveRate("RUB", currencies, "USD").rate]]);
+      const converter = createConverter(todayRates, "USD");
+
+      // Preview values each native row at today's holding rate; the merged rows
+      // value at their stamped flow rate. With imports stamped to today, the two
+      // agree row-for-row — no phantom net-worth FX delta.
+      const previewTotal = txns.reduce(
+        (sum, t) => sum + converter.holdingToDefault(t.amount, "RUB"),
+        0,
+      );
+      const mergedTotal = result.transactions.reduce(
+        (sum, t) => sum + converter.flowToDefault(t.amount, t.fxRate),
+        0,
+      );
+      expect(mergedTotal).toBe(previewTotal);
+    });
+
+    it("stamps each leg of a single-leg foreign→default transfer", () => {
+      const rubAccount = makeAccount({ id: "acct-rub", currency: "RUB" });
+      const usdAccount = makeAccount({ id: "acct-usd", currency: "USD" });
+      const txn = makeImportTxn({
+        type: "transfer",
+        amount: -1_000_000, // 10,000.00 ₽ leaving the RUB account
+        sourceAccount: "Tinkoff",
+        targetAccountId: "acct-usd",
+        date: "2026-03-15",
+      });
+
+      const result = prepareMerge(
+        {
+          transactions: [txn],
+          selectedIds: new Set([txn.id]),
+          accountMapping: { Tinkoff: "acct-rub" },
+        },
+        [rubAccount, usdAccount],
+        [],
+        "USD",
+        currencies,
+      );
+
+      const from = result.transactions.find((t) => t.accountId === "acct-rub")!;
+      const to = result.transactions.find((t) => t.accountId === "acct-usd")!;
+      // The default (USD) leg leaves fxRate empty; the foreign (RUB) leg carries
+      // a stamped rate so it doesn't roll up 1:1.
+      expect(to.fxRate).toBeUndefined();
+      expect(from.fxRate).toBe(resolveRate("RUB", currencies, "USD").rate);
+    });
+
+    it("a USD-only import leaves every row's fxRate empty", () => {
+      const txn = makeImportTxn({ sourceAccount: "Chase", amount: -2500 });
+
+      const result = prepareMerge(
+        { transactions: [txn], selectedIds: new Set([txn.id]), accountMapping: {} },
+        [],
+        [],
+        "USD",
+      );
+
+      expect(result.transactions[0].fxRate).toBeUndefined();
     });
   });
 });

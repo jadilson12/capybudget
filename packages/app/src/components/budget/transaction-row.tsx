@@ -14,7 +14,9 @@ import type { Account, Category, Transaction, TransactionFormData } from "@capyb
 import { getAmountClass, resolveTransferPair } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useFormatters } from "@/hooks/use-formatters";
+import { useAccountMoney } from "@/contexts/currency-context";
 import { useCategoryDisplayName } from "@/lib/display-names";
+import { CurrencyBadge } from "@/components/budget/currency-badge";
 import { ArrowRight, Info, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 export interface TransactionRowProps {
@@ -30,6 +32,7 @@ export interface TransactionRowProps {
   isSelected: boolean;
   hasSelection: boolean;
   hasActions: boolean;
+  showCurrency: boolean;
   onToggleSelect?: (txnId: string, shiftKey: boolean) => void;
   onCellClick: (txn: Transaction, column: EditableColumn) => void;
   onInlineSave: (data: TransactionFormData) => void;
@@ -51,6 +54,7 @@ export const TransactionRowMemo = memo(function TransactionRow({
   isSelected,
   hasSelection,
   hasActions,
+  showCurrency,
   onToggleSelect,
   onCellClick,
   onInlineSave,
@@ -59,7 +63,8 @@ export const TransactionRowMemo = memo(function TransactionRow({
   onDelete,
 }: TransactionRowProps) {
   const { t } = useTranslation(["budget", "common"]);
-  const { money, date } = useFormatters();
+  const { date } = useFormatters();
+  const accountMoney = useAccountMoney();
   const categoryDisplayName = useCategoryDisplayName();
   const account = accountMap.get(txn.accountId);
 
@@ -123,7 +128,12 @@ export const TransactionRowMemo = memo(function TransactionRow({
         >
           {activeCol === "account" ? (
             <InlineEditCell txn={txn} column="account" accounts={accounts} categories={categories} onSave={onInlineSave} onCancel={onInlineCancel} />
-          ) : account?.name ?? t("transaction.row.unknownAccount")}
+          ) : (
+            <span className="inline-flex items-center gap-1.5">
+              {account?.name ?? t("transaction.row.unknownAccount")}
+              {showCurrency && account && <CurrencyBadge currency={account.currency} />}
+            </span>
+          )}
         </TableCell>
       )}
       <TableCell
@@ -173,7 +183,9 @@ export const TransactionRowMemo = memo(function TransactionRow({
       >
         {activeCol === "amount" ? (
           <InlineEditCell txn={txn} column="amount" accounts={accounts} categories={categories} onSave={onInlineSave} onCancel={onInlineCancel} />
-        ) : money(txn.amount)}
+        ) : (
+          accountMoney(txn.amount, account?.currency)
+        )}
       </TableCell>
       {hasActions && (
         <TableCell className="px-1">

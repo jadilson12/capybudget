@@ -35,6 +35,11 @@
     "title": "Currency",
     "description": "How amounts are displayed.",
     "changeNotice": "Changes display only — your balances aren’t converted.",
+    "switchWarning": {
+      "title": "Switch default currency?",
+      "description": "This budget has accounts in other currencies. Switching re-expresses every stored exchange rate into {{currency}} — your history keeps its shape but values are restated in the new currency, and cents may shift slightly. For a clean start you’re usually better off creating a new budget in {{currency}}. Continue?",
+      "confirm": "Switch to {{currency}}"
+    },
     "requestCurrency": "Request currency",
     "preview": "Preview",
     "formatSettings": "Format settings",
@@ -46,7 +51,13 @@
     },
     "noSymbol": "{{currency}} has no symbol, so position has no effect.",
     "decimals": "Decimals",
-    "resetDefaults": "Reset to {{currency}} defaults"
+    "resetDefaults": "Reset to {{currency}} defaults",
+    "exchangeRates": "Exchange rates to {{currency}}",
+    "rateLabel": "1 {{code}} =",
+    "rateManual": "your rate",
+    "rateSeed": "our estimate",
+    "rateUnset": "rate unset",
+    "rateReset": "use our estimate"
   },
   "provider": {
     "title": "AI Provider",

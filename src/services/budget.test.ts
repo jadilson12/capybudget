@@ -30,9 +30,12 @@ describe("detectBudget", () => {
     expect(mockExists).toHaveBeenCalledWith("/path/to/folder/budget.json");
   });
 
-  it("returns parsed BudgetMeta when budget.json exists at current version", async () => {
-    const meta = {
-      schemaVersion: 3,
+  it("normalizes an old flat-shape budget.json into the unified currency map", async () => {
+    // A v4 budget.json from before the unified map carries the flat currency
+    // trio. detectBudget reads it through the normalizer, lifting the trio into
+    // the default entry and dropping the superseded fields.
+    const flat = {
+      schemaVersion: 4,
       name: "Test Budget",
       currency: "USD",
       currencyDecimals: 2,
@@ -41,19 +44,26 @@ describe("detectBudget", () => {
       lastModified: "2026-01-01T00:00:00.000Z",
     };
     mockExists.mockResolvedValue(true);
-    mockReadTextFile.mockResolvedValue(JSON.stringify(meta));
+    mockReadTextFile.mockResolvedValue(JSON.stringify(flat));
 
     const result = await detectBudget("/budgets/test");
-    expect(result).toEqual(meta);
+    expect(result).toEqual({
+      schemaVersion: 4,
+      name: "Test Budget",
+      defaultCurrency: "USD",
+      currencies: { USD: { decimals: 2, symbolPosition: "before" } },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastModified: "2026-01-01T00:00:00.000Z",
+    });
     expect(mockReadTextFile).toHaveBeenCalledWith("/budgets/test/budget.json");
   });
 
-  it("backfills format fields from the currency for a pre-format budget.json", async () => {
-    // A budget.json written before the format fields shipped is at the current
-    // schema version but lacks decimals + symbol position. detectBudget backfills
-    // them from the currency's defaults (RUB → 0 decimals, symbol after).
+  it("backfills a pre-format budget.json's display knobs from the currency", async () => {
+    // A budget.json written before the format fields shipped carries only a flat
+    // `currency`. detectBudget backfills the default entry's knobs from the
+    // currency's defaults (RUB → 0 decimals, symbol after).
     const preFormat = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       name: "Pre-format",
       currency: "RUB",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -63,16 +73,16 @@ describe("detectBudget", () => {
     mockReadTextFile.mockResolvedValue(JSON.stringify(preFormat));
 
     const result = await detectBudget("/budgets/preformat");
-    expect(result?.currencyDecimals).toBe(0);
-    expect(result?.currencySymbolPosition).toBe("after");
+    expect(result?.defaultCurrency).toBe("RUB");
+    expect(result?.currencies.RUB).toEqual({ decimals: 0, symbolPosition: "after" });
   });
 
   it("defaults currency to USD for a current-version, pre-currency budget.json", async () => {
     // A budget.json written before the currency field shipped is at the
-    // current schema version but lacks `currency`. detectBudget must return a
-    // type-complete BudgetMeta rather than `currency: undefined`.
+    // current schema version but lacks any currency. detectBudget must return a
+    // type-complete BudgetMeta with the USD default rather than undefined.
     const preCurrency = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       name: "Legacy Budget",
       createdAt: "2026-01-01T00:00:00.000Z",
       lastModified: "2026-01-01T00:00:00.000Z",
@@ -81,12 +91,13 @@ describe("detectBudget", () => {
     mockReadTextFile.mockResolvedValue(JSON.stringify(preCurrency));
 
     const result = await detectBudget("/budgets/legacy");
-    expect(result?.currency).toBe("USD");
+    expect(result?.defaultCurrency).toBe("USD");
+    expect(result?.currencies.USD).toEqual({ decimals: 2, symbolPosition: "before" });
   });
 
   it("defaults currency to USD when migrating a pre-currency budget", async () => {
     // A v1 budget predates the currency field entirely. After migration the
-    // returned meta is at v3, whose shape requires `currency`.
+    // returned meta is at the current version, in the unified currency shape.
     const oldMeta = {
       schemaVersion: 1,
       name: "Old Budget",
@@ -95,29 +106,36 @@ describe("detectBudget", () => {
     };
     const oldAccountsCsv = "id,name,type,archived,sortOrder,createdAt";
     const oldCategoriesCsv = "id,name,group,archived,sortOrder";
+    const oldTransactionsCsv =
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt";
 
     mockExists.mockResolvedValue(true);
     mockReadTextFile.mockImplementation(async (path: string) => {
       if (path.endsWith("budget.json")) return JSON.stringify(oldMeta);
       if (path.endsWith("accounts.csv")) return oldAccountsCsv;
       if (path.endsWith("categories.csv")) return oldCategoriesCsv;
+      if (path.endsWith("transactions.csv")) return oldTransactionsCsv;
       throw new Error(`Unexpected read: ${path}`);
     });
 
     const result = await detectBudget("/budgets/old");
-    expect(result?.schemaVersion).toBe(3);
-    expect(result?.currency).toBe("USD");
+    expect(result?.schemaVersion).toBe(4);
+    expect(result?.defaultCurrency).toBe("USD");
 
     const metaWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
       c[0].endsWith("budget.json"),
     );
-    expect(JSON.parse(metaWrite![1]).currency).toBe("USD");
+    const writtenMeta = JSON.parse(metaWrite![1]);
+    expect(writtenMeta.defaultCurrency).toBe("USD");
+    expect(writtenMeta.currencies.USD).toEqual({ decimals: 2, symbolPosition: "before" });
+    // The migrated file carries the unified shape, not the flat trio.
+    expect(writtenMeta).not.toHaveProperty("currency");
   });
 
   it("runs pending migrations and writes updated budget.json", async () => {
-    // budget.json is at v1; accounts.csv has no excludeFromNetWorth column,
-    // categories.csv has no assigned column. detectBudget should walk
-    // v1 → v2 → v3 sequentially.
+    // budget.json is at v1; the CSVs lack every column added since. detectBudget
+    // walks v1 → v2 → v3 → v4 sequentially. This asserts the v1 → v2 (accounts)
+    // and v2 → v3 (categories) steps; the v3 → v4 step is covered on its own.
     const oldMeta = {
       schemaVersion: 1,
       name: "Old Budget",
@@ -133,20 +151,23 @@ describe("detectBudget", () => {
       "id,name,group,archived,sortOrder",
       "cat-1,Food,Daily Living,false,1",
     ].join("\n");
+    const oldTransactionsCsv =
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt";
 
     mockExists.mockResolvedValue(true);
     mockReadTextFile.mockImplementation(async (path: string) => {
       if (path.endsWith("budget.json")) return JSON.stringify(oldMeta);
       if (path.endsWith("accounts.csv")) return oldAccountsCsv;
       if (path.endsWith("categories.csv")) return oldCategoriesCsv;
+      if (path.endsWith("transactions.csv")) return oldTransactionsCsv;
       throw new Error(`Unexpected read: ${path}`);
     });
 
     const result = await detectBudget("/budgets/test");
 
-    expect(result?.schemaVersion).toBe(3);
+    expect(result?.schemaVersion).toBe(4);
 
-    // v1 → v2 rewrote accounts.csv with the new column.
+    // v1 → v2 rewrote accounts.csv with the new column (first accounts write).
     const accountsWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
       c[0].endsWith("accounts.csv"),
     );
@@ -168,10 +189,10 @@ describe("detectBudget", () => {
       c[0].endsWith("budget.json"),
     );
     expect(metaWrite).toBeDefined();
-    expect(JSON.parse(metaWrite![1]).schemaVersion).toBe(3);
+    expect(JSON.parse(metaWrite![1]).schemaVersion).toBe(4);
   });
 
-  it("runs only the v2 → v3 migration when starting from v2", async () => {
+  it("runs only the v2 → v3 and v3 → v4 migrations when starting from v2", async () => {
     const oldMeta = {
       schemaVersion: 2,
       name: "v2 Budget",
@@ -179,27 +200,40 @@ describe("detectBudget", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       lastModified: "2026-01-01T00:00:00.000Z",
     };
+    // Already at v2: accounts.csv carries excludeFromNetWorth, so v1 → v2 is
+    // skipped, but v3 → v4 still stamps currency.
+    const v2AccountsCsv = [
+      "id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt",
+      "acc-1,Cash,cash,false,false,1,2026-01-01T00:00:00.000Z",
+    ].join("\n");
     const v2CategoriesCsv = [
       "id,name,group,archived,sortOrder",
       "cat-1,Rent,Fixed,false,1",
       "cat-2,Food,Daily Living,false,2",
     ].join("\n");
+    const v2TransactionsCsv =
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt";
 
     mockExists.mockResolvedValue(true);
     mockReadTextFile.mockImplementation(async (path: string) => {
       if (path.endsWith("budget.json")) return JSON.stringify(oldMeta);
+      if (path.endsWith("accounts.csv")) return v2AccountsCsv;
       if (path.endsWith("categories.csv")) return v2CategoriesCsv;
+      if (path.endsWith("transactions.csv")) return v2TransactionsCsv;
       throw new Error(`Unexpected read: ${path}`);
     });
 
     const result = await detectBudget("/budgets/test");
-    expect(result?.schemaVersion).toBe(3);
+    expect(result?.schemaVersion).toBe(4);
 
-    // accounts.csv must NOT be rewritten — it's already at v2.
+    // accounts.csv is rewritten only by v3 → v4 (adds currency), not v1 → v2.
     const accountsWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
       c[0].endsWith("accounts.csv"),
     );
-    expect(accountsWrite).toBeUndefined();
+    expect(accountsWrite).toBeDefined();
+    expect(accountsWrite![1]).toContain(
+      "acc-1,Cash,cash,false,false,1,2026-01-01T00:00:00.000Z,USD",
+    );
 
     // categories.csv gains the `assigned` column with empty cells.
     const categoriesWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
@@ -210,6 +244,154 @@ describe("detectBudget", () => {
     expect(lines[0]).toBe("id,name,group,archived,sortOrder,assigned");
     expect(lines[1]).toBe("cat-1,Rent,Fixed,false,1,");
     expect(lines[2]).toBe("cat-2,Food,Daily Living,false,2,");
+  });
+
+  it("v3 → v4 stamps the budget default currency and leaves fxRate empty", async () => {
+    const v3Meta = {
+      schemaVersion: 3,
+      name: "v3 Budget",
+      currency: "EUR",
+      currencyDecimals: 2,
+      currencySymbolPosition: "before",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastModified: "2026-01-01T00:00:00.000Z",
+    };
+    const v3AccountsCsv = [
+      "id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt",
+      "acc-1,Checking,checking,false,false,1,2026-01-01T00:00:00.000Z",
+      "acc-2,Cash,cash,false,false,2,2026-01-01T00:00:00.000Z",
+    ].join("\n");
+    const v3TransactionsCsv = [
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt",
+      "txn-1,2026-01-15T12:00:00.000Z,expense,-5000,cat-1,acc-1,,Store,,2026-01-15T00:00:00.000Z",
+    ].join("\n");
+
+    mockExists.mockResolvedValue(true);
+    mockReadTextFile.mockImplementation(async (path: string) => {
+      if (path.endsWith("budget.json")) return JSON.stringify(v3Meta);
+      if (path.endsWith("accounts.csv")) return v3AccountsCsv;
+      if (path.endsWith("transactions.csv")) return v3TransactionsCsv;
+      throw new Error(`Unexpected read: ${path}`);
+    });
+
+    const result = await detectBudget("/budgets/v3");
+    expect(result?.schemaVersion).toBe(4);
+
+    // accounts.csv gains `currency`, stamped with the budget default for every row.
+    const accountsWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
+      c[0].endsWith("accounts.csv"),
+    );
+    expect(accountsWrite).toBeDefined();
+    const accountLines = accountsWrite![1].split(/\r?\n/);
+    expect(accountLines[0]).toBe(
+      "id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt,currency",
+    );
+    expect(accountLines[1]).toBe(
+      "acc-1,Checking,checking,false,false,1,2026-01-01T00:00:00.000Z,EUR",
+    );
+    expect(accountLines[2]).toBe(
+      "acc-2,Cash,cash,false,false,2,2026-01-01T00:00:00.000Z,EUR",
+    );
+
+    // transactions.csv gains `fxRate`, empty everywhere (trailing comma).
+    const transactionsWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
+      c[0].endsWith("transactions.csv"),
+    );
+    expect(transactionsWrite).toBeDefined();
+    const txnLines = transactionsWrite![1].split(/\r?\n/);
+    expect(txnLines[0]).toBe(
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt,fxRate",
+    );
+    expect(txnLines[1]).toBe(
+      "txn-1,2026-01-15T12:00:00.000Z,expense,-5000,cat-1,acc-1,,Store,,2026-01-15T00:00:00.000Z,",
+    );
+  });
+
+  it("v3 → v4 with no `currency` in budget.json falls back to USD", async () => {
+    // A budget.json predating the currency field is still at v3 on disk. The
+    // migration resolves the default the same way every reader does → USD.
+    const v3Meta = {
+      schemaVersion: 3,
+      name: "Pre-currency v3",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastModified: "2026-01-01T00:00:00.000Z",
+    };
+    const v3AccountsCsv = [
+      "id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt",
+      "acc-1,Checking,checking,false,false,1,2026-01-01T00:00:00.000Z",
+    ].join("\n");
+    const v3TransactionsCsv =
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt";
+
+    mockExists.mockResolvedValue(true);
+    mockReadTextFile.mockImplementation(async (path: string) => {
+      if (path.endsWith("budget.json")) return JSON.stringify(v3Meta);
+      if (path.endsWith("accounts.csv")) return v3AccountsCsv;
+      if (path.endsWith("transactions.csv")) return v3TransactionsCsv;
+      throw new Error(`Unexpected read: ${path}`);
+    });
+
+    await detectBudget("/budgets/v3-nocurrency");
+
+    const accountsWrite = mockWriteTextFile.mock.calls.find((c: string[]) =>
+      c[0].endsWith("accounts.csv"),
+    );
+    expect(accountsWrite![1]).toContain(
+      "acc-1,Checking,checking,false,false,1,2026-01-01T00:00:00.000Z,USD",
+    );
+  });
+
+  it("v3 → v4 is idempotent — re-running rewrites nothing", async () => {
+    const fs = new Map<string, string>();
+    fs.set(
+      "/budgets/v3/budget.json",
+      JSON.stringify({
+        schemaVersion: 3,
+        name: "v3 Budget",
+        currency: "EUR",
+        currencyDecimals: 2,
+        currencySymbolPosition: "before",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastModified: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    fs.set(
+      "/budgets/v3/accounts.csv",
+      [
+        "id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt",
+        "acc-1,Checking,checking,false,false,1,2026-01-01T00:00:00.000Z",
+      ].join("\n"),
+    );
+    fs.set(
+      "/budgets/v3/transactions.csv",
+      [
+        "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt",
+        "txn-1,2026-01-15T12:00:00.000Z,expense,-5000,cat-1,acc-1,,Store,,2026-01-15T00:00:00.000Z",
+      ].join("\n"),
+    );
+
+    mockExists.mockImplementation(async (path: string) => fs.has(path));
+    mockReadTextFile.mockImplementation(async (path: string) => {
+      const v = fs.get(path);
+      if (v === undefined) throw new Error(`Unexpected read: ${path}`);
+      return v;
+    });
+    mockWriteTextFile.mockImplementation(async (path: string, contents: string) => {
+      fs.set(path, contents);
+    });
+
+    const first = await detectBudget("/budgets/v3");
+    expect(first?.schemaVersion).toBe(4);
+    const accountsAfterFirst = fs.get("/budgets/v3/accounts.csv")!;
+    const txnsAfterFirst = fs.get("/budgets/v3/transactions.csv")!;
+    const metaAfterFirst = fs.get("/budgets/v3/budget.json")!;
+    expect(accountsAfterFirst).toContain(",EUR");
+
+    const second = await detectBudget("/budgets/v3");
+    expect(second?.schemaVersion).toBe(4);
+    expect(fs.get("/budgets/v3/accounts.csv")).toBe(accountsAfterFirst);
+    expect(fs.get("/budgets/v3/transactions.csv")).toBe(txnsAfterFirst);
+    expect(fs.get("/budgets/v3/budget.json")).toBe(metaAfterFirst);
   });
 
   it("is idempotent — second detectBudget call is a no-op", async () => {
@@ -242,6 +424,10 @@ describe("detectBudget", () => {
         "cat-1,Food,Daily Living,false,1",
       ].join("\n"),
     );
+    fs.set(
+      "/budgets/test/transactions.csv",
+      "id,datetime,type,amount,categoryId,accountId,transferPairId,merchant,note,createdAt",
+    );
 
     mockExists.mockImplementation(async (path: string) => fs.has(path));
     mockReadTextFile.mockImplementation(async (path: string) => {
@@ -253,24 +439,28 @@ describe("detectBudget", () => {
       fs.set(path, contents);
     });
 
-    // First call: migrates v1 -> v3 (chain).
+    // First call: migrates v1 -> v4 (chain).
     const first = await detectBudget("/budgets/test");
-    expect(first?.schemaVersion).toBe(3);
+    expect(first?.schemaVersion).toBe(4);
 
     const accountsAfterFirst = fs.get("/budgets/test/accounts.csv")!;
     const categoriesAfterFirst = fs.get("/budgets/test/categories.csv")!;
+    const transactionsAfterFirst = fs.get("/budgets/test/transactions.csv")!;
     const metaAfterFirst = fs.get("/budgets/test/budget.json")!;
     expect(accountsAfterFirst).toContain("excludeFromNetWorth");
+    expect(accountsAfterFirst).toContain("currency");
     expect(categoriesAfterFirst).toContain("assigned");
+    expect(transactionsAfterFirst).toContain("fxRate");
 
     // Second call on the same folder — files must be byte-identical and
-    // schemaVersion must remain at 3. budget.json's lastModified is allowed to
+    // schemaVersion must remain at 4. budget.json's lastModified is allowed to
     // refresh, but only because the migration loop ran (it shouldn't here).
     const second = await detectBudget("/budgets/test");
-    expect(second?.schemaVersion).toBe(3);
+    expect(second?.schemaVersion).toBe(4);
 
     expect(fs.get("/budgets/test/accounts.csv")).toBe(accountsAfterFirst);
     expect(fs.get("/budgets/test/categories.csv")).toBe(categoriesAfterFirst);
+    expect(fs.get("/budgets/test/transactions.csv")).toBe(transactionsAfterFirst);
     // budget.json must also stay byte-identical: when no migrations are
     // pending, detectBudget skips the metadata rewrite entirely.
     expect(fs.get("/budgets/test/budget.json")).toBe(metaAfterFirst);
@@ -287,34 +477,32 @@ describe("bootstrapBudget", () => {
 
   it("returns a BudgetMeta with the current schema version", async () => {
     const result = await bootstrapBudget("/new/budget", "My Budget");
-    expect(result.schemaVersion).toBe(3);
+    expect(result.schemaVersion).toBe(4);
     expect(result.name).toBe("My Budget");
-    expect(result.currency).toBe("USD");
-    expect(result.currencyDecimals).toBe(2);
-    expect(result.currencySymbolPosition).toBe("before");
+    expect(result.defaultCurrency).toBe("USD");
+    expect(result.currencies.USD).toEqual({ decimals: 2, symbolPosition: "before" });
     expect(result.createdAt).toBeTruthy();
     expect(result.lastModified).toBeTruthy();
   });
 
-  it("seeds format fields from the chosen currency's defaults", async () => {
+  it("seeds the default entry from the chosen currency's defaults", async () => {
     const result = await bootstrapBudget("/new/budget", "Ruble Budget", "RUB");
-    expect(result.currencyDecimals).toBe(0);
-    expect(result.currencySymbolPosition).toBe("after");
+    expect(result.currencies.RUB).toEqual({ decimals: 0, symbolPosition: "after" });
   });
 
   it("defaults currency to USD when omitted", async () => {
     const result = await bootstrapBudget("/new/budget", "My Budget");
-    expect(result.currency).toBe("USD");
+    expect(result.defaultCurrency).toBe("USD");
   });
 
   it("honors a passed currency", async () => {
     const result = await bootstrapBudget("/new/budget", "My Budget", "EUR");
-    expect(result.currency).toBe("EUR");
+    expect(result.defaultCurrency).toBe("EUR");
 
     const budgetJsonCall = mockWriteTextFile.mock.calls.find(
       (call: string[]) => call[0] === "/new/budget/budget.json",
     );
-    expect(JSON.parse(budgetJsonCall![1]).currency).toBe("EUR");
+    expect(JSON.parse(budgetJsonCall![1]).defaultCurrency).toBe("EUR");
   });
 
   it("writes budget.json", async () => {
@@ -327,7 +515,7 @@ describe("bootstrapBudget", () => {
 
     const written = JSON.parse(budgetJsonCall![1]);
     expect(written.name).toBe("Test");
-    expect(written.schemaVersion).toBe(3);
+    expect(written.schemaVersion).toBe(4);
   });
 
   it("writes categories.csv with default categories", async () => {
@@ -352,7 +540,7 @@ describe("bootstrapBudget", () => {
       (call: string[]) => call[0] === "/new/budget/accounts.csv",
     );
     expect(accountsCall).toBeDefined();
-    expect(accountsCall![1]).toContain("id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt");
+    expect(accountsCall![1]).toContain("id,name,type,archived,excludeFromNetWorth,sortOrder,createdAt,currency");
   });
 
   it("writes empty transactions.csv with header", async () => {
@@ -363,6 +551,7 @@ describe("bootstrapBudget", () => {
     );
     expect(transactionsCall).toBeDefined();
     expect(transactionsCall![1]).toContain("id,datetime,type,amount,categoryId");
+    expect(transactionsCall![1]).toContain("createdAt,fxRate");
   });
 
   it("writes 4 files total (budget.json + 3 CSVs)", async () => {

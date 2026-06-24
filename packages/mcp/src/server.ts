@@ -5,7 +5,12 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { createCsvRepository } from "@capybudget/persistence"
-import { DEFAULT_CURRENCY } from "@capybudget/core"
+import {
+  DEFAULT_CURRENCY,
+  formatDefaultsFor,
+  resolveBudgetCurrency,
+  type BudgetCurrency,
+} from "@capybudget/core"
 import {
   getToolDefinitions,
   runTool,
@@ -22,14 +27,16 @@ if (!BUDGET_PATH) {
 
 // ── Currency ─────────────────────────────────────────────────────
 
-async function readBudgetCurrency(budgetPath: string): Promise<string> {
+async function readBudgetCurrency(budgetPath: string): Promise<BudgetCurrency> {
   try {
     const metaPath = await nodeFileAdapter.join(budgetPath, "budget.json")
     const text = await nodeFileAdapter.readFile(metaPath)
-    const raw = JSON.parse(text) as { currency?: string }
-    return raw.currency ?? DEFAULT_CURRENCY
+    return resolveBudgetCurrency(JSON.parse(text))
   } catch {
-    return DEFAULT_CURRENCY
+    return {
+      defaultCurrency: DEFAULT_CURRENCY,
+      currencies: { [DEFAULT_CURRENCY]: formatDefaultsFor(DEFAULT_CURRENCY) },
+    }
   }
 }
 
@@ -37,13 +44,14 @@ async function readBudgetCurrency(budgetPath: string): Promise<string> {
 
 const repo = createCsvRepository(BUDGET_PATH, nodeFileAdapter, { immediate: true })
 
-const currency = await readBudgetCurrency(BUDGET_PATH)
-const dispatchCtx: ToolContext = {
+// Currency is read per tool call (below), not frozen here: this server is a
+// long-running process serving an external agent, so a manual rate edit in the
+// app must reach the next tool call. budget.json is a tiny file.
+const dispatchCtxBase = {
   repo,
   fileAdapter: nodeFileAdapter,
   budgetPath: BUDGET_PATH,
-  currency,
-}
+} satisfies Partial<ToolContext>
 
 // ── Server setup ─────────────────────────────────────────────────
 
@@ -66,7 +74,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
   try {
-    const text = await runTool(name, args ?? {}, dispatchCtx)
+    const { defaultCurrency, currencies } = await readBudgetCurrency(BUDGET_PATH)
+    const text = await runTool(name, args ?? {}, {
+      ...dispatchCtxBase,
+      currency: defaultCurrency,
+      currencies,
+    })
     return { content: [{ type: "text", text }] }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

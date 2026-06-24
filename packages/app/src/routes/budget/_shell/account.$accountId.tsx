@@ -5,6 +5,7 @@ import { AccountHeader } from "@/components/budget/account-header";
 import { useBudgetUI } from "@/contexts/budget-context";
 import { useBudgetLabels } from "@/lib/use-budget-labels";
 import { useAccounts, useTransactions } from "@/hooks/use-budget-data";
+import { useConverter } from "@/contexts/currency-context";
 import { getTransactionsForAccount, getAccountBalance } from "@capybudget/core";
 
 export const Route = createFileRoute("/budget/_shell/account/$accountId")({
@@ -16,6 +17,7 @@ function AccountView() {
   const { accountId } = Route.useParams();
   const { data: accounts = [] } = useAccounts();
   const { data: transactions = [] } = useTransactions();
+  const converter = useConverter();
   const { setCurrentAccountId } = useBudgetUI();
   const account = accounts.find((a) => a.id === accountId);
 
@@ -33,14 +35,24 @@ function AccountView() {
   }
 
   const accountTransactions = getTransactionsForAccount(accountId, transactions);
-  const balance = getAccountBalance(accountId, transactions);
+  // The account page is the account's own view, so the header leads with the
+  // native balance in the account's currency. The converter values it in the
+  // default for the secondary line a foreign account shows.
+  const nativeBalance = getAccountBalance(accountId, transactions);
+  const defaultBalance = getAccountBalance(accountId, transactions, converter, account.currency);
 
   return (
     <TransactionView
       transactions={accountTransactions}
       showAccountColumn={false}
       readOnly={account.archived}
-      header={<AccountHeader account={account} balance={balance} />}
+      header={
+        <AccountHeader
+          account={account}
+          nativeBalance={nativeBalance}
+          defaultBalance={defaultBalance}
+        />
+      }
     />
   );
 }
