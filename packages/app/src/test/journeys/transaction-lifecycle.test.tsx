@@ -20,11 +20,20 @@ const existingTxn = makeTransaction({
   datetime: "2026-01-15T12:00:00.000Z",
 });
 
+const archived = makeAccount({ id: "acc-old", name: "Old Savings", type: "savings", archived: true });
+
 const seed = {
   accounts: [checking],
   categories: [groceries, salary],
   transactions: [existingTxn],
 };
+
+const seedWithArchived = {
+  ...seed,
+  accounts: [checking, archived],
+};
+
+const budgetSearch = "?path=/test-budget&name=Test+Budget";
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -47,7 +56,8 @@ function getSidebarAccountLink(name: string): HTMLElement {
 
 /** Open the transaction form and wait for the auto-focus timer to settle. */
 async function openTransactionForm(user: ReturnType<typeof import("@testing-library/user-event").default.setup>) {
-  await user.click(screen.getByRole("button", { name: /add transaction/i }));
+  const cta = within(screen.getByRole("main")).getByRole("button", { name: /add transaction/i });
+  await user.click(cta);
   // BudgetShell has a setTimeout(80ms) to auto-focus the amount input.
   // React.StrictMode double-mounts the effect, creating a second timer.
   // Wait for it to fire before interacting with the form.
@@ -177,5 +187,27 @@ describe("Transaction lifecycle", () => {
       const formPanel = screen.getByPlaceholderText("0.00").closest("[class*='translate']");
       expect(formPanel?.className).toContain("-translate-y-full");
     });
+  }, TIMEOUT);
+
+  it("shows the Add transaction CTA on a live account view", async () => {
+    await renderApp({ seed: seedWithArchived, url: `/budget/account/acc-checking${budgetSearch}` });
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Checking" })).toBeInTheDocument();
+    });
+
+    expect(
+      within(screen.getByRole("main")).getByRole("button", { name: /add transaction/i }),
+    ).toBeInTheDocument();
+  }, TIMEOUT);
+
+  it("hides the Add transaction CTA on an archived account view", async () => {
+    await renderApp({ seed: seedWithArchived, url: `/budget/account/acc-old${budgetSearch}` });
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Old Savings" })).toBeInTheDocument();
+    });
+
+    expect(
+      within(screen.getByRole("main")).queryByRole("button", { name: /add transaction/i }),
+    ).toBeNull();
   }, TIMEOUT);
 });
