@@ -6,6 +6,7 @@ const SAVINGS = "ns-savings";
 const BROKERAGE = "ns-brokerage";
 const CREDIT = "ns-credit";
 const CASH = "ns-cash";
+const JAPAN = "ns-japan";
 
 /** No stress: a high earner whose income comfortably clears a generous lifestyle.
  *  Every month a large fixed sweep moves to high-yield savings and a brokerage
@@ -21,6 +22,7 @@ export const noStress: DemoProfile = {
     account(BROKERAGE, "Brokerage", "asset", 2),
     account(CREDIT, "Amex Platinum", "credit_card", 3),
     account(CASH, "Cash", "cash", 4),
+    account(JAPAN, "Japan Savings", "savings", 5, "JPY"),
   ],
   categories: createCategories(),
   openingBalances: {
@@ -29,6 +31,7 @@ export const noStress: DemoProfile = {
     [BROKERAGE]: 18_000_000,
     [CREDIT]: -350_000,
     [CASH]: 50_000,
+    [JAPAN]: 152_000_000, // ¥1,520,000
   },
 
   incomeStreams: [
@@ -48,6 +51,15 @@ export const noStress: DemoProfile = {
       cadence: "monthly",
       amount: 22_000,
       jitterPct: 0.25,
+      dayOfMonth: 28,
+    },
+    {
+      merchant: "MUFG Bank",
+      category: "Other Income",
+      accountId: JAPAN,
+      cadence: "monthly",
+      amount: 600_000,
+      jitterPct: 0.2,
       dayOfMonth: 28,
     },
   ],
@@ -246,6 +258,14 @@ export const noStress: DemoProfile = {
       amount: 25_000,
       dayOfMonth: 10,
       note: "ATM withdrawal",
+    },
+    {
+      fromAccountId: CHECKING,
+      toAccountId: JAPAN,
+      cadence: "monthly",
+      amount: 200_000,
+      dayOfMonth: 16,
+      note: "Japan sweep",
     },
   ],
 };
