@@ -9,12 +9,12 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.3.0 — 2026-06-24
 
+- **Multi-Currency** - Give any account its own currency and Capy shows your whole budget in one display currency — each transaction converts at the rate when it happened, balances at today's rate, and the gap surfaces as a net-worth FX delta; cross-currency transfers carry a rate per leg.
+- **Demo** - Every scenario now includes a foreign-currency account, so the demo shows multi-currency net worth in action.
 - **Transactions** - A prominent "Add transaction" button in the accounts header makes logging a transaction obvious.
-- **Multi-Currency** - give any account its own currency
-- **Demo** - Each scenario gains a foreign-currency account, showing multi-currency net worth.
-- **Language** - Picker shows the language code (EN · English) and lists English, Spanish, Russian; the Russian help guide now matches the app's Капи/Капитал wording.
+- **Language** - The language picker shows each language's code (EN · English), and the Russian help guide matches the app's Капи/Капитал wording.
 
 ## 1.2.0 — 2026-06-19
 
