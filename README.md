@@ -46,7 +46,7 @@ npm run test:watch    # Vitest in watch mode
 npm run tauri build
 ```
 
-Produces a native `.dmg` (macOS), `.msi` (Windows), or `.deb`/`.AppImage` (Linux).
+Produces a native `.dmg` (macOS), `.exe` (Windows), or `.deb`/`.AppImage` (Linux).
 
 ### Releasing
 
