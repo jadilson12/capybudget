@@ -116,10 +116,18 @@ export interface TransferPair {
   pairTransaction: Transaction | undefined;
 }
 
+/** Resolves a transfer leg into its from/to accounts. Pass only transfers — for
+ *  a plain flow the sign-based split is meaningless; read `txn.accountId`. */
 export function resolveTransferPair(
   txn: Transaction,
   allTransactions: Transaction[],
 ): TransferPair {
+  if (txn.type !== "transfer") {
+    console.warn(
+      `resolveTransferPair called on non-transfer (type="${txn.type}") — read txn.accountId instead`,
+    );
+  }
+
   const pair = txn.transferPairId
     ? allTransactions.find((t) => t.id === txn.transferPairId)
     : undefined;
