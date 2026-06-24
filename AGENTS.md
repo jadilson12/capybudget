@@ -8,13 +8,17 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 npm start             # Dev mode shortcut (same as `npm run tauri dev`)
 npm run tauri dev     # Dev mode: Vite + Tauri window (use this, not just `npm run dev`)
 npm run build         # TypeScript check + Vite production build
-npm run tauri build   # Full native app build (.dmg/.msi/.deb)
+npm run tauri build   # Full native app build (.dmg/.exe/.deb/.AppImage)
 npm test              # Run all tests (vitest)
 npm run test:watch    # Vitest in watch mode
 npm run lint          # ESLint
 ```
 
 Tests live next to source files (`*.test.ts`). Vitest shares `vite.config.ts` so the `@/` alias works in tests.
+
+## Releasing
+
+Releases are cut from `main` via a version tag: `npm run release <version>` bumps every version source, commits, and tags; `git push --follow-tags` triggers the signed multi-platform build into a **draft** GitHub Release. The full procedure — promotion, required secrets, and stable download URLs — lives in [README.md](./README.md#releasing).
 
 ## Architecture
 
