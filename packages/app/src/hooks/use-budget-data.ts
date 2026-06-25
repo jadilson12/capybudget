@@ -6,6 +6,7 @@ import {
 } from "@capybudget/intelligence";
 import type { Account, Category, Transaction } from "@capybudget/core";
 import { useBudgetRepository } from "@/contexts/repository-context";
+import { useBudgetMeta } from "@/hooks/use-budget-meta";
 import { useCurrency } from "@/contexts/currency-context";
 
 export const budgetKeys = {
@@ -21,6 +22,7 @@ export function useAccounts() {
     queryKey: budgetKeys.accounts(),
     queryFn: () => repo.getAccounts(),
     staleTime: Infinity,
+    retry: false,
   });
 }
 
@@ -30,6 +32,7 @@ export function useCategories() {
     queryKey: budgetKeys.categories(),
     queryFn: () => repo.getCategories(),
     staleTime: Infinity,
+    retry: false,
   });
 }
 
@@ -39,7 +42,16 @@ export function useTransactions() {
     queryKey: budgetKeys.transactions(),
     queryFn: () => repo.getTransactions(),
     staleTime: Infinity,
+    retry: false,
   });
+}
+
+export function useBudgetReady(budgetPath: string): boolean {
+  const { isLoading: metaLoading } = useBudgetMeta(budgetPath);
+  const { isPending: accountsPending } = useAccounts();
+  const { isPending: categoriesPending } = useCategories();
+  const { isPending: transactionsPending } = useTransactions();
+  return !metaLoading && !accountsPending && !categoriesPending && !transactionsPending;
 }
 
 /**

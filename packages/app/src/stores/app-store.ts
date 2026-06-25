@@ -9,7 +9,10 @@ interface AppState {
   recentBudgets: RecentBudget[];
   addRecentBudget: (path: string, name: string) => void;
   renameRecentBudget: (path: string, name: string) => void;
-  removeRecentBudget: (path: string) => void;
+  removeRecentBudget: (path: string, opts?: { forget?: boolean }) => void;
+
+  launchBudgetPath: string | null;
+  setLaunchBudgetPath: (path: string | null) => void;
 
   sortPreferences: Record<string, SortConfig>;
   setSortPreference: (viewKey: string, sort: SortConfig) => void;
@@ -39,10 +42,18 @@ export const useAppStore = create<AppState>()(
           ),
         })),
 
-      removeRecentBudget: (path) =>
+      removeRecentBudget: (path, opts) =>
         set((state) => ({
           recentBudgets: state.recentBudgets.filter((b) => b.path !== path),
+          launchBudgetPath:
+            opts?.forget && state.launchBudgetPath === path
+              ? null
+              : state.launchBudgetPath,
         })),
+
+      launchBudgetPath: null,
+
+      setLaunchBudgetPath: (path) => set({ launchBudgetPath: path }),
 
       sortPreferences: {},
 
@@ -54,6 +65,13 @@ export const useAppStore = create<AppState>()(
       getSortPreference: (viewKey) =>
         get().sortPreferences[viewKey] ?? DEFAULT_SORT,
     }),
-    { name: "capybudget-app" },
+    {
+      name: "capybudget-app",
+      partialize: (state) => ({
+        recentBudgets: state.recentBudgets,
+        launchBudgetPath: state.launchBudgetPath,
+        sortPreferences: state.sortPreferences,
+      }),
+    },
   ),
 );
