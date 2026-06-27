@@ -9,11 +9,13 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.4.0 — 2026-06-27
 
-- **Transactions, Accounts, Categories** - Right-click any row for the same quick actions as its menu button.
-- **Navigation** - Back/forward arrows in the rail (and ⌘[ / ⌘]) step through history; the active Budget tab now lives in the URL (bookmarkable).
+- **App** - Mark a budget to open automatically on launch; a gentle loading state means views no longer flash empty before your data loads.
 - **App** - If something goes wrong, Capy now shows a friendly recovery screen with a Restart button instead of a blank window.
+- **Navigation** - Back/forward arrows in the rail (and ⌘[ / ⌘]) step through history; the active Budget tab now lives in the URL (bookmarkable).
+- **Transactions, Accounts, Categories** - Right-click any row for the same quick actions as its menu button.
+- **Transactions** - Bulk date changes keep transfer pairs in sync, and the bulk action bar hides actions that don't apply to your selection.
 - **Developer** - A dev-only Settings panel surfaces app diagnostics and a button to preview the error screen.
 - **Removed** - Dropped the never-surfaced keyboard-only undo/redo (⌘Z / ⌘⇧Z).
 
