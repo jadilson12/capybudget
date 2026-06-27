@@ -4,7 +4,6 @@ import {
   GripVertical,
   MoreHorizontal,
   Plus,
-  Trash2,
 } from "lucide-react";
 import {
   SortableContext,
@@ -31,10 +30,14 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { categoryMenuItems } from "@/components/budget/row-menus";
 import {
   useCreateCategory,
   useUpdateCategory,
@@ -328,63 +331,61 @@ function SortableCategoryRow({
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className="group/row flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-accent"
-    >
-      <button
-        className="flex h-5 w-4 shrink-0 items-center justify-center text-muted-foreground/30 hover:text-muted-foreground/60 cursor-grab active:cursor-grabbing touch-none"
-        {...attributes}
-        {...listeners}
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            ref={setNodeRef}
+            style={style}
+            className="group/row flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-accent"
+          />
+        }
       >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
-
-      {isRenaming ? (
-        <Input
-          autoFocus
-          value={renameValue}
-          onChange={(e) => onRenameValueChange(e.target.value)}
-          onBlur={onRenameConfirm}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onRenameConfirm();
-            if (e.key === "Escape") onRenameCancel();
-          }}
-          className="h-6 flex-1 text-sm px-1 py-0"
-        />
-      ) : (
-        <span className="flex-1 text-sm">{categoryDisplay(category.name)}</span>
-      )}
-
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0 opacity-60 group-hover/row:opacity-100"
-            />
-          }
+        <button
+          className="flex h-5 w-4 shrink-0 items-center justify-center text-muted-foreground/30 hover:text-muted-foreground/60 cursor-grab active:cursor-grabbing touch-none"
+          {...attributes}
+          {...listeners}
         >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {!isArchived && (
-            <DropdownMenuItem onClick={onStartRename}>
-              {t("category.menu.rename")}
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem onClick={onArchive}>
-            {isArchived ? t("common:actions.unarchive") : t("common:actions.archive")}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onClick={onDelete}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            {t("common:actions.delete")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+
+        {isRenaming ? (
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => onRenameValueChange(e.target.value)}
+            onBlur={onRenameConfirm}
+            onContextMenu={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRenameConfirm();
+              if (e.key === "Escape") onRenameCancel();
+            }}
+            className="h-6 flex-1 text-sm px-1 py-0"
+          />
+        ) : (
+          <span className="flex-1 text-sm">{categoryDisplay(category.name)}</span>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 opacity-60 group-hover/row:opacity-100"
+              />
+            }
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {categoryMenuItems({ isArchived, onStartRename, onArchive, onDelete }, t)}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {categoryMenuItems({ isArchived, onStartRename, onArchive, onDelete }, t)}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

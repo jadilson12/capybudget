@@ -3,13 +3,13 @@ import { TableCell } from "@/components/ui/table";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineEditCell, type EditableColumn } from "@/components/budget/inline-edit-cells";
+import { transactionMenuItems } from "@/components/budget/row-menus";
 import type { Account, Category, Transaction, TransactionFormData } from "@capybudget/core";
 import { getAmountClass, resolveTransferPair } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
@@ -17,7 +17,7 @@ import { useFormatters } from "@/hooks/use-formatters";
 import { useAccountMoney } from "@/contexts/currency-context";
 import { useCategoryDisplayName } from "@/lib/display-names";
 import { CurrencyBadge } from "@/components/budget/currency-badge";
-import { ArrowRight, Info, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ArrowRight, Info, MoreHorizontal } from "lucide-react";
 
 export interface TransactionRowProps {
   txn: Transaction;
@@ -198,18 +198,7 @@ export const TransactionRowMemo = memo(function TransactionRow({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {onEdit && (
-                <DropdownMenuItem onClick={() => onEdit(txn)}>
-                  <Pencil className="h-3.5 w-3.5" />
-                  {t("common:actions.edit")}
-                </DropdownMenuItem>
-              )}
-              {onDelete && (
-                <DropdownMenuItem variant="destructive" onClick={() => onDelete(txn)}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {t("common:actions.delete")}
-                </DropdownMenuItem>
-              )}
+              {transactionMenuItems(txn, { onEdit, onDelete }, t)}
             </DropdownMenuContent>
           </DropdownMenu>
         </TableCell>

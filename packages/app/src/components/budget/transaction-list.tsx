@@ -9,12 +9,19 @@ import {
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { type EditableColumn } from "@/components/budget/inline-edit-cells";
 import type { Transaction, TransactionFormData } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useAccounts, useCategories, useTransactions, useIsMultiCurrency } from "@/hooks/use-budget-data";
 import type { SortColumn, SortConfig } from "@/lib/filter-transactions";
 import { TransactionRowMemo } from "@/components/budget/transaction-row";
+import { transactionMenuItems } from "@/components/budget/row-menus";
+import { cn } from "@/lib/utils";
 import {
   defaultDirection,
   ROW_HEIGHT_ESTIMATE,
@@ -119,7 +126,7 @@ export function TransactionList({
   indeterminate,
   emptyState,
 }: TransactionListProps) {
-  const { t } = useTranslation("budget");
+  const { t } = useTranslation(["budget", "common"]);
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
   const { data: allTransactions = [] } = useTransactions();
@@ -269,10 +276,32 @@ export function TransactionList({
         <TableBody>
           {transactions.map((txn, i) => {
             const { rowClassName } = rowProps(txn, i);
+            if (!hasActions) {
+              return (
+                <TableRow key={txn.id} className={rowClassName}>
+                  {renderCells(txn, i)}
+                </TableRow>
+              );
+            }
             return (
-              <TableRow key={txn.id} className={rowClassName}>
-                {renderCells(txn, i)}
-              </TableRow>
+              <ContextMenu key={txn.id}>
+                <ContextMenuTrigger
+                  render={
+                    <tr
+                      data-slot="table-row"
+                      className={cn(
+                        "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+                        rowClassName,
+                      )}
+                    />
+                  }
+                >
+                  {renderCells(txn, i)}
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  {transactionMenuItems(txn, { onEdit, onDelete }, t)}
+                </ContextMenuContent>
+              </ContextMenu>
             );
           })}
         </TableBody>
@@ -313,16 +342,37 @@ export function TransactionList({
           {virtualItems.map((virtualRow) => {
             const txn = transactions[virtualRow.index];
             const { rowClassName } = rowProps(txn, virtualRow.index);
+            if (!hasActions) {
+              return (
+                <tr
+                  key={txn.id}
+                  data-slot="table-row"
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  className={`border-b ${rowClassName}`}
+                >
+                  {renderCells(txn, virtualRow.index)}
+                </tr>
+              );
+            }
             return (
-              <tr
-                key={txn.id}
-                data-slot="table-row"
-                data-index={virtualRow.index}
-                ref={virtualizer.measureElement}
-                className={`border-b ${rowClassName}`}
-              >
-                {renderCells(txn, virtualRow.index)}
-              </tr>
+              <ContextMenu key={txn.id}>
+                <ContextMenuTrigger
+                  render={
+                    <tr
+                      data-slot="table-row"
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      className={`border-b ${rowClassName}`}
+                    />
+                  }
+                >
+                  {renderCells(txn, virtualRow.index)}
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  {transactionMenuItems(txn, { onEdit, onDelete }, t)}
+                </ContextMenuContent>
+              </ContextMenu>
             );
           })}
           {paddingBottom > 0 && (
