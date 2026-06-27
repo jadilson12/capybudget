@@ -6,12 +6,15 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
+import { useAnalyticsStore } from "@/stores/analytics-store";
 import { NavigationRail, type Section } from "./navigation-rail";
 
 async function renderRail(props: {
   activeSection: Section;
   hasImportData?: boolean;
   initialPath?: string;
+  initialEntries?: string[];
+  initialIndex?: number;
 }) {
   const rootRoute = createRootRoute({
     component: () => (
@@ -26,7 +29,10 @@ async function renderRail(props: {
 
   const router = createRouter({
     routeTree: rootRoute,
-    history: createMemoryHistory({ initialEntries: [props.initialPath ?? "/"] }),
+    history: createMemoryHistory({
+      initialEntries: props.initialEntries ?? [props.initialPath ?? "/"],
+      initialIndex: props.initialIndex,
+    }),
   });
 
   await router.load();
@@ -38,12 +44,13 @@ async function renderRail(props: {
     expect(screen.getAllByRole("link").length).toBeGreaterThan(0);
   });
 
-  return result;
+  return { ...result, router };
 }
 
 describe("NavigationRail", () => {
   afterEach(() => {
     cleanup();
+    useAnalyticsStore.setState({ lastTab: "spending" });
   });
 
   it("marks the active section with aria-current", async () => {
@@ -71,6 +78,24 @@ describe("NavigationRail", () => {
     expect(screen.getAllByRole("link", { name: "Accounts" }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole("link", { name: "Budget" }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole("link", { name: "Import" }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("Budget destination carries ?tab= for the last-viewed non-default tab", async () => {
+    useAnalyticsStore.getState().setLastTab("netWorth");
+    await renderRail({ activeSection: "accounts" });
+
+    const budgetLinks = screen.getAllByRole("link", { name: "Budget" });
+    expect(budgetLinks.length).toBeGreaterThan(0);
+    expect(budgetLinks.every((el) => el.getAttribute("href")?.includes("tab=netWorth"))).toBe(true);
+  });
+
+  it("Budget destination omits the tab key when the last tab is the default (spending)", async () => {
+    useAnalyticsStore.getState().setLastTab("spending");
+    await renderRail({ activeSection: "accounts" });
+
+    const budgetLinks = screen.getAllByRole("link", { name: "Budget" });
+    expect(budgetLinks.length).toBeGreaterThan(0);
+    expect(budgetLinks.every((el) => !el.getAttribute("href")?.includes("tab="))).toBe(true);
   });
 
   it("renders the settings gear at the bottom of the rail", async () => {

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ensureMinMonths,
   filterTransactionsByDateRange,
@@ -9,7 +10,7 @@ import type { DateRange } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useConverter, useCurrency } from "@/contexts/currency-context";
 import { useTransactions, useCategories, useAccounts } from "@/hooks/use-budget-data";
-import { useAnalyticsStore, type PeriodType, type TabId } from "@/stores/analytics-store";
+import { TAB_IDS, useAnalyticsStore, validateTabSearch, type PeriodType, type TabId } from "@/stores/analytics-store";
 import { DateRangeNav } from "./date-range-nav";
 import { SummaryStrip } from "./summary-strip";
 import { computeIncludedIds } from "./net-worth-account-filter-utils";
@@ -21,20 +22,17 @@ import { MerchantsTab } from "./merchants-tab";
 import { MonthlyBudgetTab } from "./monthly-budget-tab";
 
 // ── Tab definitions ──
+// Tab id set and order live in TAB_IDS (the store); this maps each to the
+// periods its date-range picker offers, so the two can't drift.
 
-interface TabDef {
-  id: TabId;
-  allowedPeriods: PeriodType[];
-}
-
-const TABS: TabDef[] = [
-  { id: "spending", allowedPeriods: ["month", "quarter", "year", "allTime", "custom"] },
-  { id: "cashFlow", allowedPeriods: ["year", "allTime", "custom"] },
-  { id: "netWorth", allowedPeriods: ["year", "allTime", "custom"] },
-  { id: "compare", allowedPeriods: ["year", "allTime", "custom"] },
-  { id: "merchants", allowedPeriods: ["month", "quarter", "year", "allTime"] },
-  { id: "monthlyBudget", allowedPeriods: ["month"] },
-];
+const ALLOWED_PERIODS: Record<TabId, PeriodType[]> = {
+  spending: ["month", "quarter", "year", "allTime", "custom"],
+  cashFlow: ["year", "allTime", "custom"],
+  netWorth: ["year", "allTime", "custom"],
+  compare: ["year", "allTime", "custom"],
+  merchants: ["month", "quarter", "year", "allTime"],
+  monthlyBudget: ["month"],
+};
 
 export function AnalyticsView() {
   const { t } = useTranslation("analytics");
@@ -45,19 +43,42 @@ export function AnalyticsView() {
   const converter = useConverter();
   const defaultCurrency = useCurrency();
 
-  // Per-tab store
-  const activeTab = useAnalyticsStore((s) => s.activeTab);
+  // Active tab is URL-owned; a missing or malformed param reads as Spending.
+  // Spread the current search on switch so path/name are never clobbered.
+  const search = useSearch({ from: "/budget/_shell/categories" });
+  const activeTab = validateTabSearch(search).tab ?? "spending";
+  const navigate = useNavigate();
+  const selectTab = useCallback(
+    (next: TabId) => navigate({ to: "/budget/categories", search: { ...search, tab: next } }),
+    [navigate, search],
+  );
+
+  // A stale or malformed ?tab= (e.g. an old bookmark) resolves to Spending —
+  // drop the dead param so it doesn't linger. replace: not a history step.
+  useEffect(() => {
+    if (search.tab !== undefined && validateTabSearch(search).tab === undefined) {
+      navigate({ to: "/budget/categories", search: { ...search, tab: undefined }, replace: true });
+    }
+  }, [search, navigate]);
+
+  // Re-entering Budget lands on the last-viewed tab; track it however the active
+  // tab changed (click, back/forward, deep-link), not just on explicit clicks.
+  const setLastTab = useAnalyticsStore((s) => s.setLastTab);
+  useEffect(() => {
+    setLastTab(activeTab);
+  }, [activeTab, setLastTab]);
+
+  // Per-tab store (period + date range; the active tab itself lives in the URL)
   const netWorthExcludedIds = useAnalyticsStore((s) => s.netWorthExcludedIds);
-  const tabState = useAnalyticsStore((s) => s.tabs[s.activeTab]);
-  const setActiveTab = useAnalyticsStore((s) => s.setActiveTab);
+  const tabState = useAnalyticsStore((s) => s.tabs[activeTab]);
   const setPeriod = useAnalyticsStore((s) => s.setPeriod);
   const navigateForward = useAnalyticsStore((s) => s.navigateForward);
   const navigateBack = useAnalyticsStore((s) => s.navigateBack);
   const setAllTimeRange = useAnalyticsStore((s) => s.setAllTimeRange);
   const updateDataBounds = useAnalyticsStore((s) => s.updateDataBounds);
   const dataBounds = useAnalyticsStore((s) => s.dataBounds);
-  const canGoBack = useAnalyticsStore((s) => s.canNavigateBack());
-  const canGoForward = useAnalyticsStore((s) => s.canNavigateForward());
+  const canGoBack = useAnalyticsStore((s) => s.canNavigateBack(activeTab));
+  const canGoForward = useAnalyticsStore((s) => s.canNavigateForward(activeTab));
 
   const { dateRange, periodType } = tabState;
 
@@ -115,21 +136,18 @@ export function AnalyticsView() {
   );
   const fx = fxBreakdown && hasForeignAccount && rangeIsCurrent ? fxBreakdown : null;
 
-  // Current tab definition
-  const currentTab = TABS.find((t) => t.id === activeTab) ?? TABS[0];
-
   // Handle period change
   function handlePeriodChange(type: PeriodType) {
     if (type === "allTime") {
-      setAllTimeRange(transactions);
+      setAllTimeRange(activeTab, transactions);
     } else {
-      setPeriod(type);
+      setPeriod(activeTab, type);
     }
   }
 
   // Handle custom range
   function handleCustomRange(range: DateRange) {
-    setPeriod("custom", range);
+    setPeriod(activeTab, "custom", range);
   }
 
   return (
@@ -137,18 +155,18 @@ export function AnalyticsView() {
       {/* Tab bar */}
       <div className="border-b px-6">
         <div className="flex gap-0 -mb-px min-w-0 overflow-x-auto">
-          {TABS.map((tab) => (
+          {TAB_IDS.map((id) => (
             <button
-              key={tab.id}
+              key={id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => selectTab(id)}
               className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === tab.id
+                activeTab === id
                   ? "border-brand text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {t(`tabs.${tab.id}`)}
+              {t(`tabs.${id}`)}
             </button>
           ))}
         </div>
@@ -160,10 +178,10 @@ export function AnalyticsView() {
         <DateRangeNav
           periodType={periodType}
           dateRange={dateRange}
-          allowedPeriods={currentTab.allowedPeriods}
+          allowedPeriods={ALLOWED_PERIODS[activeTab]}
           onPeriodChange={handlePeriodChange}
-          onBack={navigateBack}
-          onForward={navigateForward}
+          onBack={() => navigateBack(activeTab)}
+          onForward={() => navigateForward(activeTab)}
           canGoBack={canGoBack}
           canGoForward={canGoForward}
           onCustomRange={handleCustomRange}

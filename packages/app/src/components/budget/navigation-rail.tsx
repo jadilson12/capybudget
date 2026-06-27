@@ -3,6 +3,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Receipt, PieChart, FileUp, Settings, BookOpen } from "lucide-react";
 import { useTranslation } from "@capybudget/i18n";
 import { ModHintBadge } from "@/components/budget/mod-hint-badge";
+import { useAnalyticsStore } from "@/stores/analytics-store";
 import { modKey } from "@/lib/platform";
 
 export type Section = "accounts" | "budget" | "import";
@@ -21,6 +22,13 @@ export function NavigationRail({
   hasImportData,
 }: NavigationRailProps) {
   const search = useMemo(() => ({ path: budgetPath, name: budgetName }), [budgetPath, budgetName]);
+  // Re-entering Budget lands on the last-viewed analytics tab. Spending is the
+  // default, so omit the key there to keep URLs clean (absent === spending).
+  const lastTab = useAnalyticsStore((s) => s.lastTab);
+  const budgetSearch = useMemo(
+    () => (lastTab === "spending" ? search : { ...search, tab: lastTab }),
+    [search, lastTab],
+  );
   const navigate = useNavigate();
   const { t } = useTranslation("common");
 
@@ -30,16 +38,20 @@ export function NavigationRail({
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 
-      const routes: Record<string, string> = { "1": "/budget", "2": "/budget/categories", "3": "/budget/import" };
-      const to = routes[e.key];
-      if (to) {
+      const routes: Record<string, { to: string; search: Record<string, string> }> = {
+        "1": { to: "/budget", search },
+        "2": { to: "/budget/categories", search: budgetSearch },
+        "3": { to: "/budget/import", search },
+      };
+      const dest = routes[e.key];
+      if (dest) {
         e.preventDefault();
-        navigate({ to, search });
+        navigate(dest);
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [navigate, search]);
+  }, [navigate, search, budgetSearch]);
 
   const isAccounts = activeSection === "accounts";
   const isBudget = activeSection === "budget";
@@ -57,7 +69,7 @@ export function NavigationRail({
       {/* Desktop: vertical rail */}
       <nav className="hidden md:flex w-16 flex-col items-center border-r border-sidebar-border bg-sidebar pt-3 gap-1 shrink-0">
         <NavItem variant="rail" to="/budget" search={search} active={isAccounts} icon={Receipt} label={t("nav.accounts")} hint="1" />
-        <NavItem variant="rail" to="/budget/categories" search={search} active={isBudget} icon={PieChart} label={t("nav.budget")} hint="2" />
+        <NavItem variant="rail" to="/budget/categories" search={budgetSearch} active={isBudget} icon={PieChart} label={t("nav.budget")} hint="2" />
         <NavItem variant="rail" to="/budget/import" search={search} active={isImport} icon={FileUp} label={t("nav.import")} indicator={hasImportData} hint="3" />
 
         {/* Bottom utility cluster — separated from primary nav.
@@ -71,7 +83,7 @@ export function NavigationRail({
       {/* Mobile: bottom tab bar */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 flex items-center justify-around border-t border-sidebar-border bg-sidebar/95 backdrop-blur-sm px-2 pb-[env(safe-area-inset-bottom)]">
         <NavItem variant="tab" to="/budget" search={search} active={isAccounts} icon={Receipt} label={t("nav.accounts")} />
-        <NavItem variant="tab" to="/budget/categories" search={search} active={isBudget} icon={PieChart} label={t("nav.budget")} />
+        <NavItem variant="tab" to="/budget/categories" search={budgetSearch} active={isBudget} icon={PieChart} label={t("nav.budget")} />
         <NavItem variant="tab" to="/budget/import" search={search} active={isImport} icon={FileUp} label={t("nav.import")} indicator={hasImportData} />
       </nav>
     </>

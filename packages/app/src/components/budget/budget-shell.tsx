@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useMatches, useNavigate, useSearch } from "@tanstack/react-router";
+import { Outlet, useMatches, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { NavigationRail, type Section } from "@/components/budget/navigation-rail";
+import { HistoryNav } from "@/components/budget/history-nav";
 import { Sidebar } from "@/components/budget/sidebar";
 
 import { AccountDialog } from "@/components/budget/account-dialog";
@@ -60,6 +61,7 @@ export function BudgetShell() {
   // fresh name into nav links; the search param is the load-time fallback.
   const name = meta.name || searchName;
   const navigate = useNavigate();
+  const router = useRouter();
   const createTxn = useCreateTransaction();
   const updateTxn = useUpdateTransaction();
   const { undo, redo } = useUndoRedo();
@@ -143,6 +145,14 @@ export function BudgetShell() {
         e.preventDefault();
         navigate({ to: "/budget/settings", search: { path, name } });
       }
+      if (mod && (e.key === "[" || e.key === "]")) {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        if (e.key === "[") router.history.back();
+        else router.history.forward();
+      }
       if (e.key === "Escape" && capyOpen) {
         e.preventDefault();
         setCapyOpen(false);
@@ -163,7 +173,7 @@ export function BudgetShell() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleForm, undo, redo, effectiveFormOpen, handleDismissForm, capyOpen, setCapyOpen, navigate, path, name]);
+  }, [toggleForm, undo, redo, effectiveFormOpen, handleDismissForm, capyOpen, setCapyOpen, navigate, router, path, name]);
 
   useEffect(() => {
     if (effectiveFormOpen) {
@@ -249,6 +259,8 @@ export function BudgetShell() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* Desktop only — the browser already has back/forward in the demo. */}
+            {!__IS_DEMO__ && <HistoryNav className="ml-1.5 border-l border-border/50 pl-1.5" />}
           </div>
           <div className="relative flex justify-center">
             {!isArchivedView && (
