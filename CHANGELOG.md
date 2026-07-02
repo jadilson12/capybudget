@@ -9,11 +9,14 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.4.1 — 2026-07-02
 
 - **Capy** - Refreshed AI model pickers: Fable joins the Claude Code options, and the Anthropic option and default move to Claude Sonnet 5.
+- **Capy** - Set-up-AI prompts now take you straight to the AI settings tab.
 - **Import** - Screenshot rows without a readable date (like pending transactions) now import dated today instead of silently vanishing, and the preview says when any rows were skipped.
 - **Import** - Imports now match your existing accounts by name, and no row can ever import without an account.
+- **Import** - Rows excluded as duplicates no longer flag a missing account.
+- **Transactions** - Clicking the backdrop beside the transaction panel now dismisses it.
 
 ## 1.4.0 — 2026-06-27
 
