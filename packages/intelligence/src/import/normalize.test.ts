@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { getToday } from "@capybudget/core";
 import { countStreamedRows, normalizeCsv, normalizeImage, isImageOrPdf, normalizeMapping } from "./normalize";
 import type { NormalizeProgress } from "./events";
 import { CSV_MAPPING_SCHEMA, EXTRACTION_SCHEMA } from "./schemas";
@@ -635,6 +636,37 @@ describe("normalizeImage", () => {
     expect(session.calls[0].schema).toBe(EXTRACTION_SCHEMA);
     expect(rows[0]).toMatchObject({ id: "imp-1", description: "Netflix", merchant: "", categoryId: "" });
     expect(rows[0].sourceCategory).toBe("Entertainment");
+  });
+
+  it("coerces an unparseable extracted date to today instead of dropping the row", async () => {
+    const session = new MockStructuredSession([
+      () => ({
+        result: {
+          count: 2,
+          rows: [
+            { date: "Pending", amount: -1299, type: "expense", description: "Chipotle", sourceAccount: "", sourceCategory: "" },
+            { date: "01/05/2026", amount: -700, type: "expense", description: "Uber", sourceAccount: "", sourceCategory: "" },
+          ],
+        },
+      }),
+    ]);
+
+    const { rows } = await normalizeImage(session, { name: "r.png", content: "B64", mediaType: "image/png" });
+
+    expect(rows[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(rows[1].date).toBe("2026-01-05");
+  });
+
+  it("tells the model to date pending / date-less rows to today", async () => {
+    const session = new MockStructuredSession([() => ({ result: { count: 0, rows: [] } })]);
+    // Bracket the call so a midnight rollover mid-test can't flake it.
+    const before = getToday();
+    await normalizeImage(session, { name: "r.png", content: "B64", mediaType: "image/png" });
+    const after = getToday();
+
+    const prompt = JSON.stringify(session.calls[0].messages);
+    expect(prompt).toContain("Pending");
+    expect(prompt).toMatch(new RegExp(`use today's date, (${before}|${after})`));
   });
 
   it("sends an image block for an image and a document block for a PDF", async () => {
