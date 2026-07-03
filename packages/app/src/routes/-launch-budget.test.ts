@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { useAppStore } from "@/stores/app-store"
 import { resolveLaunchRedirect, resetLaunchResolution } from "./-launch-budget"
 import { markSkipLaunchRedirect, consumeSkipLaunchRedirect } from "@/lib/crash-recovery"
+import { consumeReopenFailure } from "@/lib/reopen-failure"
 
 // The resolver imports its budget service via a deep relative path; mock at
 // the same path so vi.mock can resolve it.
@@ -14,6 +15,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetLaunchResolution()
   sessionStorage.clear()
+  consumeReopenFailure()
   useAppStore.setState({ recentBudgets: [], launchBudgetPath: null })
 })
 
@@ -71,20 +73,50 @@ describe("resolveLaunchRedirect", () => {
     expect(mockDetectBudget).not.toHaveBeenCalled()
   })
 
-  it("falls through without clearing the pointer when validation fails", async () => {
+  it("clears the pointer when validation throws so the failure surfaces once", async () => {
     useAppStore.setState({ launchBudgetPath: "/gone" })
     mockDetectBudget.mockRejectedValue(new Error("unmounted"))
 
     expect(await resolveLaunchRedirect()).toBeNull()
-    // Pointer survives so the next launch retries (drive may be back).
-    expect(useAppStore.getState().launchBudgetPath).toBe("/gone")
+    // Auto-open is off now; the next launch lands on the selector, not a retry.
+    expect(useAppStore.getState().launchBudgetPath).toBeNull()
   })
 
-  it("falls through when the folder is no longer a budget, keeping the pointer", async () => {
+  it("clears the pointer when the folder is no longer a budget", async () => {
     useAppStore.setState({ launchBudgetPath: "/notabudget" })
     mockDetectBudget.mockResolvedValue(null)
 
     expect(await resolveLaunchRedirect()).toBeNull()
-    expect(useAppStore.getState().launchBudgetPath).toBe("/notabudget")
+    expect(useAppStore.getState().launchBudgetPath).toBeNull()
+  })
+
+  it("flags a reopen failure with the recent's name when validation throws", async () => {
+    useAppStore.setState({
+      launchBudgetPath: "/gone",
+      recentBudgets: [{ path: "/gone", name: "Household", lastOpened: "2026-01-01" }],
+    })
+    mockDetectBudget.mockRejectedValue(new Error("no access"))
+
+    await resolveLaunchRedirect()
+
+    expect(consumeReopenFailure()).toEqual({ path: "/gone", name: "Household" })
+  })
+
+  it("flags a reopen failure (falling back to the folder's basename) when the folder isn't a budget", async () => {
+    useAppStore.setState({ launchBudgetPath: "/some/path/Groceries" })
+    mockDetectBudget.mockResolvedValue(null)
+
+    await resolveLaunchRedirect()
+
+    expect(consumeReopenFailure()).toEqual({ path: "/some/path/Groceries", name: "Groceries" })
+  })
+
+  it("does not flag a reopen failure on a successful reopen", async () => {
+    useAppStore.setState({ launchBudgetPath: "/b" })
+    mockDetectBudget.mockResolvedValue({ name: "Budget" })
+
+    await resolveLaunchRedirect()
+
+    expect(consumeReopenFailure()).toBeNull()
   })
 })

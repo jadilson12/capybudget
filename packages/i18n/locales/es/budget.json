@@ -8,7 +8,13 @@
     "whatsAFolder": "¿Qué es una carpeta de presupuesto?",
     "folderExplainer": "Capy guarda todo como archivos simples dentro de una carpeta que tú eliges: transactions.csv, budget.json. Sincroniza entre dispositivos poniéndola en iCloud o Google Drive.",
     "recent": "Recientes",
+    "openRecent": "Abrir {{name}}",
     "removeFromRecents": "Quitar {{name}} de los recientes",
+    "reopenFailed": {
+      "title": "No se pudo abrir {{name}}",
+      "description": "No se encontró {{path}}.",
+      "dismiss": "Descartar"
+    },
     "newDialog": {
       "title": "Nuevo presupuesto",
       "description": "Ponle nombre y elige una moneda para mostrar.",

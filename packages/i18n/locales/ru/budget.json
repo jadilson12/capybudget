@@ -8,7 +8,13 @@
     "whatsAFolder": "Что такое папка бюджета?",
     "folderExplainer": "Капи хранит всё в виде обычных файлов в выбранной тобой папке — transactions.csv, budget.json. Положи её в iCloud или Google Диск, чтобы синхронизировать между устройствами.",
     "recent": "Недавние",
+    "openRecent": "Открыть {{name}}",
     "removeFromRecents": "Убрать {{name}} из недавних",
+    "reopenFailed": {
+      "title": "Не удалось открыть {{name}}",
+      "description": "{{path}} не найдена.",
+      "dismiss": "Закрыть"
+    },
     "newDialog": {
       "title": "Новый бюджет",
       "description": "Дай название и выбери валюту отображения.",

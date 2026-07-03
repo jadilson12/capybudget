@@ -9,6 +9,7 @@ export default defineConfig({
   define: {
     __PROJECT_ROOT__: JSON.stringify(""),
     __IS_DEMO__: JSON.stringify(true),
+    __MAS__: JSON.stringify(false),
   },
   plugins: [
     TanStackRouterVite({
@@ -30,6 +31,7 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "src/adapters/demo-claude-cli-session"),
       },
       // Tauri module stubs
+      { find: "@tauri-apps/plugin-opener", replacement: path.resolve(__dirname, "src/stubs/tauri-opener") },
       { find: "@tauri-apps/plugin-shell", replacement: path.resolve(__dirname, "src/stubs/tauri-shell") },
       { find: "@tauri-apps/plugin-fs", replacement: path.resolve(__dirname, "src/stubs/tauri-fs") },
       { find: "@tauri-apps/plugin-store", replacement: path.resolve(__dirname, "src/stubs/tauri-store") },

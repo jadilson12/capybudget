@@ -1,6 +1,7 @@
 import { redirect } from "@tanstack/react-router"
 import { useAppStore } from "@/stores/app-store"
 import { consumeSkipLaunchRedirect } from "@/lib/crash-recovery"
+import { flagReopenFailure } from "@/lib/reopen-failure"
 import { detectBudget } from "../../../../src/services/budget"
 
 let resolved = false
@@ -20,12 +21,28 @@ export async function resolveLaunchRedirect(): Promise<ReturnType<typeof redirec
   const path = useAppStore.getState().launchBudgetPath
   if (!path) return null
 
+  // Reopen failed: the auto-open contract is broken. Turn it off so the next
+  // launch doesn't fail again (the user re-enables it in Settings), and flag a
+  // one-time notice naming the budget — from recents, or the folder's basename.
+  const failReopen = () => {
+    const recent = useAppStore.getState().recentBudgets.find((b) => b.path === path)
+    flagReopenFailure({
+      path,
+      name: recent?.name ?? path.split("/").filter(Boolean).pop() ?? path,
+    })
+    useAppStore.getState().setLaunchBudgetPath(null)
+  }
+
   try {
     const meta = await detectBudget(path)
-    if (!meta) return null
+    if (!meta) {
+      failReopen()
+      return null
+    }
     useAppStore.getState().addRecentBudget(path, meta.name)
     return redirect({ to: "/budget", search: { path, name: meta.name } })
   } catch {
+    failReopen()
     return null
   }
 }

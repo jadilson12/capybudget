@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { exists } from "@tauri-apps/plugin-fs";
 import { toast } from "sonner";
-import { FolderPlus, FolderOpen, HelpCircle, AlertCircle, ExternalLink } from "lucide-react";
+import { FolderPlus, FolderOpen, HelpCircle, AlertCircle, ExternalLink, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -25,6 +25,8 @@ import { DEFAULT_CURRENCY } from "@capybudget/core";
 import { useTranslation } from "@capybudget/i18n";
 import { useAppStore } from "@/stores/app-store";
 import { CurrencyCombobox } from "@/components/budget/currency-combobox";
+import { persistFolderAccess, forgetFolderAccess, reconcileFolderAccess } from "@/lib/folder-access";
+import { consumeReopenFailure } from "@/lib/reopen-failure";
 import {
   detectBudget,
   bootstrapBudget,
@@ -37,6 +39,8 @@ import { RecentBudgetCard } from "@/components/budget/recent-budget-card";
 import bgDay from "@/assets/capy-bg-day.webp";
 import bgNight from "@/assets/capy-bg-night.webp";
 import { useTheme } from "next-themes";
+
+declare const __MAS__: boolean;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +56,10 @@ export function BudgetSelector() {
   const { theme, resolvedTheme } = useTheme();
   const { recentBudgets, addRecentBudget, removeRecentBudget } = useAppStore();
   const [loading, setLoading] = useState(false);
+
+  // Set by the launch redirect when the last budget couldn't be reopened.
+  // Auto-open was already turned off; this is a one-time notice.
+  const [reopenFailure, setReopenFailure] = useState(() => consumeReopenFailure());
 
   // Error modal state — shown when the user picks a folder that's non-empty
   // but doesn't contain a budget. Both intents share the dialog, copy varies.
@@ -69,7 +77,10 @@ export function BudgetSelector() {
 
   // Prune dead recents on mount: any path whose budget.json is gone (folder
   // deleted, drive unmounted, etc.) gets dropped silently. Runs once.
+  // Skipped under the sandbox, where an unreachable folder means access lapsed,
+  // not deletion — the recent stays so its access can be re-granted on click.
   useEffect(() => {
+    if (__MAS__) return;
     let cancelled = false;
     const paths = useAppStore.getState().recentBudgets.map((b) => b.path);
     if (paths.length === 0) return;
@@ -85,6 +96,9 @@ export function BudgetSelector() {
 
   async function navigateToBudget(folderPath: string, name: string) {
     addRecentBudget(folderPath, name);
+    await persistFolderAccess(folderPath);
+    // addRecentBudget may have evicted the 11th recent; drop its bookmark.
+    await reconcileFolderAccess();
     await navigate({
       to: "/budget",
       search: { path: folderPath, name },
@@ -145,12 +159,12 @@ export function BudgetSelector() {
     }
   }
 
-  async function pickAndProcess(intent: Intent) {
+  async function pickAndProcess(intent: Intent, defaultPath?: string) {
     if (loading) return;
     setLoading(true);
     let selected: string | null = null;
     try {
-      selected = (await open({ directory: true, multiple: false })) as
+      selected = (await open({ directory: true, multiple: false, defaultPath })) as
         | string
         | null;
     } finally {
@@ -168,7 +182,23 @@ export function BudgetSelector() {
     void pickAndProcess("open");
   }
 
-  function handleRecentOpen(folderPath: string) {
+  async function handleRecentOpen(folderPath: string) {
+    // Under the sandbox a recent may open without a prompt (access restored at
+    // launch) or need re-granting. If we can't reach it, re-prompt at that
+    // folder so re-selecting restores access. In the DMG build an unreachable
+    // recent is simply gone — processFolder toasts and prunes it.
+    if (__MAS__) {
+      let reachable = false;
+      try {
+        reachable = await exists(folderPath);
+      } catch {
+        reachable = false;
+      }
+      if (!reachable) {
+        void pickAndProcess("open", folderPath);
+        return;
+      }
+    }
     void processFolder(folderPath, "open");
   }
 
@@ -232,6 +262,30 @@ export function BudgetSelector() {
             </p>
           </div>
 
+          {/* Reopen-failure notice — last budget couldn't be reopened. Recovery
+              is the recents list below. */}
+          {reopenFailure && (
+            <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">
+                  {t("selector.reopenFailed.title", { name: reopenFailure.name })}
+                </p>
+                <p className="mt-1 break-all text-xs text-muted-foreground">
+                  {t("selector.reopenFailed.description", { path: reopenFailure.path })}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 text-muted-foreground/60 hover:text-muted-foreground"
+                aria-label={t("selector.reopenFailed.dismiss")}
+                onClick={() => setReopenFailure(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex flex-col gap-3">
             <Button
@@ -283,7 +337,10 @@ export function BudgetSelector() {
                     key={budget.path}
                     budget={budget}
                     onOpen={handleRecentOpen}
-                    onRemove={(path) => removeRecentBudget(path, { forget: true })}
+                    onRemove={(path) => {
+                      removeRecentBudget(path, { forget: true });
+                      void forgetFolderAccess(path);
+                    }}
                   />
                 ))}
               </div>
@@ -295,7 +352,7 @@ export function BudgetSelector() {
             <button
               type="button"
               className="inline-flex items-center gap-1 text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-              onClick={() => { void openExternal("https://capybudget.app"); }}
+              onClick={() => { void openUrl("https://capybudget.app"); }}
             >
               capybudget.app
               <ExternalLink className="h-3 w-3" />

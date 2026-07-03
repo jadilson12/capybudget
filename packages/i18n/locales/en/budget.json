@@ -8,7 +8,13 @@
     "whatsAFolder": "What’s a budget folder?",
     "folderExplainer": "Capy stores everything as plain files inside a folder you choose — transactions.csv, budget.json. Sync across devices by putting it in iCloud or Google Drive.",
     "recent": "Recent",
+    "openRecent": "Open {{name}}",
     "removeFromRecents": "Remove {{name}} from recents",
+    "reopenFailed": {
+      "title": "Could not open {{name}}",
+      "description": "{{path}} was not found.",
+      "dismiss": "Dismiss"
+    },
     "newDialog": {
       "title": "New budget",
       "description": "Name it and pick a display currency.",
