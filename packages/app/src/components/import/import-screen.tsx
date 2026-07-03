@@ -117,40 +117,50 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
   // already be on this tab, where navigation alone wouldn't remount the screen).
   const mountedRef = useRef(true);
   const checkStaging = useCallback(async (): Promise<void> => {
-    const [staged, transferCtx] = await Promise.all([
-      staging.readTransactions(),
-      staging.readTransferContext().then((c) => c ?? {}),
-    ]);
-    if (!mountedRef.current) return;
-    if (staged) {
-      setHasStaging(true);
-      setHasImportData(true);
-      setResumeBatch(resumeMeter(staged.rows, new Set(Object.keys(transferCtx))));
-      setDiskChecked(true);
-      return;
-    }
-    const state = await staging.readState();
-    if (!mountedRef.current) return;
-    // A run already in flight owns the staging — don't re-fire over it. The
-    // store's `running` flag survives navigation, so it's the authority here.
-    const runInFlight = useImportStore.getState().running;
-    if (state?.source === "chat" && !runInFlight) {
-      setHasImportData(true);
-      setDiskChecked(true);
-      // Drop the chat marker before the run progresses, so a re-check in the
-      // pre-History window doesn't spawn a second orchestrator over the same
-      // sources. The orchestrator overwrites state.json as it advances anyway.
-      await staging.writeState({ ...state, source: undefined });
+    try {
+      const [staged, transferCtx] = await Promise.all([
+        staging.readTransactions(),
+        staging.readTransferContext().then((c) => c ?? {}),
+      ]);
       if (!mountedRef.current) return;
-      // `start()` runs the plain staged sources — the chat on-ramp carries no
-      // per-run account/instruction hints (those are file-attach controls).
-      if (!start()) toast.error(t("errors.providerRequired"));
-      return;
+      if (staged) {
+        setHasStaging(true);
+        setHasImportData(true);
+        setResumeBatch(resumeMeter(staged.rows, new Set(Object.keys(transferCtx))));
+        setDiskChecked(true);
+        return;
+      }
+      const state = await staging.readState();
+      if (!mountedRef.current) return;
+      // A run already in flight owns the staging — don't re-fire over it. The
+      // store's `running` flag survives navigation, so it's the authority here.
+      const runInFlight = useImportStore.getState().running;
+      if (state?.source === "chat" && !runInFlight) {
+        setHasImportData(true);
+        setDiskChecked(true);
+        // Drop the chat marker before the run progresses, so a re-check in the
+        // pre-History window doesn't spawn a second orchestrator over the same
+        // sources. The orchestrator overwrites state.json as it advances anyway.
+        await staging.writeState({ ...state, source: undefined });
+        if (!mountedRef.current) return;
+        // `start()` runs the plain staged sources — the chat on-ramp carries no
+        // per-run account/instruction hints (those are file-attach controls).
+        if (!start()) toast.error(t("errors.providerRequired"));
+        return;
+      }
+      await refreshSourceFiles();
+      if (!mountedRef.current) return;
+      setHasImportData(false);
+      setDiskChecked(true);
+    } catch (err) {
+      // Staging reads can be denied (e.g. MAS sandbox before the folder grant).
+      // `diskChecked` gates the whole screen — always settle it, or the user is
+      // stranded on the spinner.
+      console.error("[import] staging check failed:", err);
+      if (!mountedRef.current) return;
+      setHasImportData(false);
+      setDiskChecked(true);
     }
-    await refreshSourceFiles();
-    if (!mountedRef.current) return;
-    setHasImportData(false);
-    setDiskChecked(true);
   }, [staging, start, refreshSourceFiles, setHasImportData, t]);
 
   useEffect(() => {
