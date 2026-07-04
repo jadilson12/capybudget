@@ -4,10 +4,37 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const SRC_TAURI = resolve(ROOT, "src-tauri");
+
+// Auto-load the build machine's MAS credentials so `npm run build|package|upload:mas`
+// works with no manual `export`s. This module is imported by all three scripts, and
+// imports fully evaluate before the importing script reads `process.env`, so the file
+// is applied in time. It holds only identifiers and the .p8 path — the real secrets
+// (keychain private keys, the .p8 itself) live elsewhere — and is machine-local, never
+// in the repo. Default path ~/Documents/capy-mas/mas.env; override with CAPY_MAS_ENV.
+// Values already in the environment win, so CI and one-off overrides are untouched.
+function loadLocalMasEnv() {
+  const envPath = process.env.CAPY_MAS_ENV ?? resolve(homedir(), "Documents/capy-mas/mas.env");
+  if (!existsSync(envPath)) return;
+  for (const rawLine of readFileSync(envPath, "utf8").split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1];
+    let val = m[2].trim();
+    if (val.length >= 2 && ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+
+loadLocalMasEnv();
 
 export function fail(msg) {
   console.error(`error: ${msg}`);

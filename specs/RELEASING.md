@@ -77,7 +77,7 @@ Without the team ID / signing identity / profile it still runs end to end and pr
 
 ### Env / asset matrix
 
-Three *different* certificates plus one API key:
+Three *different* certificates plus one API key. On the build machine these are supplied automatically (see [Build machine](#build-machine)); the table is the reference for what each one is and for setting up a new machine or CI:
 
 | Var / file | Step | What it is |
 | --- | --- | --- |
@@ -99,8 +99,10 @@ App Store Connect rejects a reused `CFBundleVersion`, so it climbs every upload.
 
 `npm run icon:mas-store` (re)generates `src-tauri/icons/AppStore-1024.png` — the 1024×1024 **no-alpha** icon App Store Connect requires for the listing (uploaded under *App Information*, separate from the bundled `.icns`, which keeps its transparent macOS reps). It's derived from the 1024 representation already inside `icon.icns`; the rounded-corner transparency is filled with the icon's own gradient so the result is fully opaque. Regenerate it whenever the app icon changes.
 
-### Current status
+### Build machine
 
-**Still blocked until the certs/profile exist:** real codesigning of the `.app` and `.pkg`, and the actual upload. Everything up to those points works today — the overlay/config path, the unsigned `.app`, an unsigned `.pkg`, the store icon, and every prereq check in `upload:mas`. The first real signed run needs `APPLE_TEAM_ID`, `APPLE_SIGNING_IDENTITY`, `APPLE_INSTALLER_IDENTITY`, `src-tauri/embedded.provisionprofile`, and the three `APPLE_API_*` values.
+MAS builds run locally on the mini, the designated build machine. It holds everything the signed flow needs: both distribution certs plus Apple's WWDR G3 intermediate in the login keychain, the provisioning profile at `src-tauri/embedded.provisionprofile`, and the App Store Connect API key at `~/Documents/capy-mas/AuthKey_*.p8`.
 
-**CI (not yet wired).** No MAS workflow exists because its secrets (three certs + API key) can't exist yet. When they do, mirror `release.yml`: import the certs into a temporary keychain, run `build:mas` then `package:mas` with the env above, then `upload:mas`. Keep it a separate job from the DMG release so a store push never blocks a GitHub release.
+The credentials above (identifiers plus the `.p8` path — not the certs' private keys) are read automatically from `~/Documents/capy-mas/mas.env` by `mas-common.mjs`, so `npm run release:mas && npm run upload:mas` runs with no manual `export`s. Override the file location with `CAPY_MAS_ENV`; anything already set in the environment takes precedence, so CI and one-off overrides are untouched.
+
+There is no MAS CI workflow: the store push stays local on the build machine, and the DMG release stays on CI, so a store upload never blocks a GitHub release. `git pull` before building on a second machine — the build-number counter is committed and App Store Connect rejects a reused `CFBundleVersion`.
