@@ -9,11 +9,15 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
-## Unreleased
+## 1.5.0 — 2026-07-04
 
-- **Import** - Attach files before setting up AI; a Set up AI prompt now gates the run instead of a runtime error. (#105)
 - **Import** - PDF bank statements now import (and attach in chat) under OpenAI too, not just Anthropic.
 - **Import** - OFX-family statements (`.ofx`/`.qfx`/`.qbo`, what Apple Card and most US banks export) now import directly, mapped without AI instead of failing as unreadable CSV.
+- **Import** - Attach files before setting up AI; a Set up AI prompt now gates the run instead of a runtime error. (#105)
+- **Security** - API keys now live in your macOS Keychain instead of a config file, migrated automatically on first launch.
+- **App** - A budget set to open on launch that has since gone missing now switches the setting off with a one-time notice, instead of failing on every launch.
+- **App** - Reveal in Finder now highlights the folder in its parent instead of opening it, matching the macOS convention.
+- **Accessibility** - Recent-budget rows are proper buttons now, so screen readers can open them, not just remove them.
 
 ## 1.4.1 — 2026-07-02
 
