@@ -29,7 +29,7 @@ import {
   isImageFile,
   isImportBinaryFile,
   isImportTextFile,
-  isPdfFilename,
+  isPdfFile,
   readFileAsBase64,
 } from "@/lib/file-attachments";
 import { ImportDropZone } from "./import-drop-zone";
@@ -233,9 +233,9 @@ export function ImportScreen({ budgetPath, budgetName }: ImportScreenProps) {
           continue;
         }
         // The active provider must be able to read PDFs, or the import starts a
-        // run the model never sees (OpenAI swaps PDFs for a placeholder note).
-        if ((file.type === "application/pdf" || isPdfFilename(file.name)) && !pdfSupported) {
-          toast.error(t("errors.pdfNeedsAnthropic", { name: file.name }));
+        // run the model never sees.
+        if (isPdfFile(file) && !pdfSupported) {
+          toast.error(t("errors.pdfNeedsCapableProvider", { name: file.name }));
           continue;
         }
         setUploadingFiles((prev) => new Set(prev).add(file.name));

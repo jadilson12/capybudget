@@ -74,16 +74,30 @@ export {
   formatAttachments,
   formatFileSize,
   isImageAttachment,
+  isPdfAttachment,
   MAX_ATTACHMENT_SIZE,
   MAX_TOTAL_ATTACHMENT_SIZE,
 } from "./attachments"
+
+// Source-file classification — one owner for media-type inference, the
+// normalization path a source takes, and the model content block it becomes.
+// (classifySource / classifyFile / mediaTypeForFilename stay package-internal —
+// imported directly where needed, not re-exported without an app consumer.)
+export {
+  fileExtension,
+  isImageFilename,
+  isPdfFilename,
+  isOfxFilename,
+  effectiveMediaType,
+  sourceContentBlock,
+} from "./source-files"
 
 // Tool layer — definitions, dispatch, handlers, and metadata
 export {
   // Definitions
   DATA_TOOL_DEFS,
   MUTATION_TOOL_DEFS,
-  IMPORT_TOOL_DEFS,
+  importToolDefs,
   READ_FILE_TOOL_DEF,
   READ_SPEC_TOOL_DEF,
   RENDER_TOOL_DEFS,
@@ -120,7 +134,7 @@ export {
   parseImportCsv,
   normalizeCsv,
   normalizeImage,
-  isImageOrPdf,
+  normalizeOfx,
   enrichBatch,
   enrichTransfers,
   batchRows,
@@ -157,6 +171,7 @@ export type {
   BudgetDataProvider,
   NormalizeCsvResult,
   NormalizeImageResult,
+  NormalizeOfxResult,
   CsvMappingResult,
   ExtractionResult,
   EnrichBatchResult,

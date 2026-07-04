@@ -2,18 +2,25 @@
  * File attachment constants and utilities for the intelligence layer.
  */
 
+import { classifyFile } from "./source-files"
 import type { FileAttachment } from "./types"
 
 export const MAX_ATTACHMENT_SIZE = 5_242_880 // 5MB per file
 export const MAX_TOTAL_ATTACHMENT_SIZE = 10_485_760 // 10MB total
 
 export function isImageAttachment(file: FileAttachment): boolean {
-  return file.mediaType.startsWith("image/")
+  return classifyFile(file) === "image"
 }
 
-/** Format text-based attachments for inlining in the message. */
+export function isPdfAttachment(file: FileAttachment): boolean {
+  return classifyFile(file) === "pdf"
+}
+
+/** Format text-based attachments for inlining in the message. Images and PDFs
+ *  ride as content blocks, so they're excluded here — their base64 content is
+ *  not text to paste. */
 export function formatAttachments(files: FileAttachment[]): string {
-  const textFiles = files.filter((f) => !isImageAttachment(f))
+  const textFiles = files.filter((f) => !isImageAttachment(f) && !isPdfAttachment(f))
   if (textFiles.length === 0) return ""
   return textFiles
     .map(

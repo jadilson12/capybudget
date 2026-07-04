@@ -15,8 +15,11 @@ import { mergeStreamContent } from "@/hooks/merge-stream-content"
 import { useIntelligenceStore } from "@/stores/intelligence-store"
 import {
   buildContext,
+  canReadPdf,
   formatAttachments,
   isImageAttachment,
+  isPdfAttachment,
+  sourceContentBlock,
   buildSystemPrompt,
   MUTATION_TOOL_NAMES,
   START_IMPORT_TOOL_NAME,
@@ -181,10 +184,16 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
     },
   )
 
+  // Read here (not just in the session signature below) so the prompt can bake
+  // in whether this provider reads PDFs — a switch changes the signature and
+  // rebuilds the session, so the prompt tracks the live capability.
+  const provider = useIntelligenceStore((s) => s.config.provider)
+  const pdfSupported = canReadPdf(provider)
+
   const ensureSession = useCallback(() => {
     if (!lifecycle.sessionRef.current) {
       const o = lifecycle.optsRef.current
-      const basePrompt = buildSystemPrompt(o.currency, o.language)
+      const basePrompt = buildSystemPrompt(o.currency, o.language, pdfSupported)
       const customInstructions = o.customInstructions?.trim()
       const systemPrompt = customInstructions
         ? `${basePrompt}\n\n## User instructions\n${customInstructions}`
@@ -193,7 +202,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       lifecycle.createSession(systemPrompt)
     }
     return lifecycle.sessionRef.current
-  }, [lifecycle])
+  }, [lifecycle, pdfSupported])
 
   // Tear down the session and wipe the on-screen conversation. The session
   // bakes its adapter, model, and instructions in at creation, so a fresh
@@ -212,8 +221,7 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
   // has no memory of these turns anyway. Without the reset, `ensureSession()`
   // would either short-circuit on the still-populated `sessionRef` (routing
   // messages to the previous adapter) or spin up a new session under a thread
-  // that visually implies continuity it doesn't have.
-  const provider = useIntelligenceStore((s) => s.config.provider)
+  // that visually implies continuity it doesn't have. `provider` is read above.
   const anthropicModel = useIntelligenceStore((s) => s.config.anthropic.model)
   const openaiModel = useIntelligenceStore((s) => s.config.openai.model)
   const claudeCliModel = useIntelligenceStore((s) => s.config.claudeCli.model)
@@ -252,7 +260,9 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
       })
 
       const allFiles = files ?? []
-      const imageFiles = allFiles.filter(isImageAttachment)
+      // Images and PDFs ride as content blocks; text attachments (CSV, OFX) are
+      // inlined by formatAttachments.
+      const blockFiles = allFiles.filter((f) => isImageAttachment(f) || isPdfAttachment(f))
       const attachmentText = formatAttachments(allFiles)
 
       let enrichedText = `${context}\n${text}`
@@ -260,23 +270,10 @@ export function useCapySession(opts: UseCapySessionOptions): UseCapySessionRetur
         enrichedText += "\n\n" + attachmentText
       }
 
-      // Build multimodal content when images are attached
-      let content: MessageContent
-      if (imageFiles.length > 0) {
-        content = [
-          { type: "text", text: enrichedText },
-          ...imageFiles.map((f) => ({
-            type: "image" as const,
-            source: {
-              type: "base64" as const,
-              media_type: f.mediaType,
-              data: f.content,
-            },
-          })),
-        ]
-      } else {
-        content = enrichedText
-      }
+      const content: MessageContent =
+        blockFiles.length > 0
+          ? [{ type: "text", text: enrichedText }, ...blockFiles.map(sourceContentBlock)]
+          : enrichedText
 
       const blocks: ContentBlock[] = []
       if (text) {

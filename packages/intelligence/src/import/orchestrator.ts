@@ -15,7 +15,6 @@ import {
   type ImportTransaction,
   type RowContext,
   type TransferContext,
-  type TransformError,
 } from "@capybudget/core";
 import type { StructuredSession } from "../structured";
 import type { BudgetDataProvider } from "./budget-data";
@@ -38,7 +37,9 @@ import {
   type NormalizeProgress,
   type TerminalLogEntry,
 } from "./events";
-import { isImageOrPdf, normalizeCsv, normalizeImage } from "./normalize";
+import { normalizeCsv, normalizeImage } from "./normalize";
+import { normalizeOfx } from "./ofx";
+import { classifySource } from "../source-files";
 import type { StagingStore } from "./staging-store";
 
 export interface OrchestratorDeps {
@@ -212,7 +213,8 @@ export class ImportOrchestrator {
     for (const source of sources) {
       if (this.stopRequested) break;
       const startId = all.length + 1;
-      if (isImageOrPdf(source.mediaType)) {
+      const kind = classifySource(source.mediaType);
+      if (kind === "image" || kind === "pdf") {
         this.status("normalizing", `Extracting transactions from ${source.name}…`);
         const result = await normalizeImage(this.deps.session, source, { startId, existingAccounts, onProgress: fileProgress });
         if (result.noData) {
@@ -220,11 +222,25 @@ export class ImportOrchestrator {
           continue;
         }
         all.push(...result.rows);
+      } else if (kind === "ofx") {
+        // Deterministic — no model call. OFX fields are standardized, so the
+        // rows are known the moment they parse; report progress in one shot.
+        this.status("normalizing", `Reading transactions from ${source.name}…`);
+        const result = normalizeOfx(source, { startId });
+        if (result.dropped.length > 0) {
+          this.log("warn", "normalizing", describeSkippedRows(source.name, result.dropped));
+        }
+        if (result.rows.length === 0) {
+          this.log("warn", "normalizing", `Skipped ${source.name} — no transaction data found.`);
+          continue;
+        }
+        fileProgress({ rows: result.rows.length, total: result.rows.length });
+        all.push(...result.rows);
       } else {
         this.status("normalizing", `Mapping columns in ${source.name}…`);
         const result = await normalizeCsv(this.deps.session, source, { startId, existingAccounts, onProgress: fileProgress });
         if (result.errors.length > 0) {
-          this.log("warn", "normalizing", describeSkippedRows(source.name, result.errors));
+          this.log("warn", "normalizing", describeSkippedRows(source.name, result.errors.map((e) => e.message)));
         }
         all.push(...result.rows);
       }
@@ -453,11 +469,11 @@ function truncateNotes(notes: string[]): string {
   return `${shown.join("; ")}${more}`;
 }
 
-/** Warn-log line for rows the CSV transform couldn't parse. Each error message
- *  already carries its row number and reason. */
-function describeSkippedRows(name: string, errors: TransformError[]): string {
-  const noun = errors.length === 1 ? "row" : "rows";
-  return `${errors.length} ${noun} skipped in ${name} — couldn't parse: ${truncateNotes(errors.map((e) => e.message))}`;
+/** Warn-log line for rows a normalizer couldn't parse (CSV transform errors,
+ *  OFX field failures). Each message already carries its own row/txn context. */
+function describeSkippedRows(name: string, messages: string[]): string {
+  const noun = messages.length === 1 ? "row" : "rows";
+  return `${messages.length} ${noun} skipped in ${name} — couldn't parse: ${truncateNotes(messages)}`;
 }
 
 /** Warn-log line for staged rows the resume read's validation dropped. */
