@@ -85,10 +85,9 @@ jobs:
       - name: Generate route trees
         run: npm run routes:generate
 
-      # Notarization authenticates with an App Store Connect API key, which
-      # (unlike an app-specific password) doesn't get revoked when the Apple ID
-      # password changes. The key is stored base64-encoded; decode it to a file
-      # and hand tauri-action its path. macOS only — no other platform notarizes.
+      # Notarize with an App Store Connect API key (survives Apple ID password
+      # changes). Stored base64-encoded; decode to a file for tauri-action.
+      # macOS only — no other platform notarizes.
       - name: Prepare App Store Connect API key
         if: matrix.platform == 'macos-latest'
         env:
