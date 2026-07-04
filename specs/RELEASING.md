@@ -96,7 +96,7 @@ Three *different* certificates plus one API key. On the build machine these are 
 
 ### Build number
 
-App Store Connect rejects a reused `CFBundleVersion`, so it climbs every upload. The current value lives in checked-in `src-tauri/mas-build-number.txt`: `build:mas` stamps it into the `.app`, and `upload:mas` increments it after a successful upload (commit the bump). Set `MAS_BUILD_NUMBER` to override for a one-off build — then you own the counter. Because the counter is a committed file, `git pull` before building on a second machine: uploading from both the laptop and the mini without pulling the other's bump stamps the same `CFBundleVersion` twice, and App Store Connect rejects the second.
+App Store Connect rejects a reused `CFBundleVersion`, so it climbs every upload. The current value lives in checked-in `src-tauri/mas-build-number.txt`: `build:mas` stamps it into the `.app`, and `upload:mas` increments it after a successful upload (commit the bump). Set `MAS_BUILD_NUMBER` to override for a one-off build — then you own the counter. Because the counter is a committed file, `git pull` before building on a second machine: uploading from two machines without pulling the other's bump stamps the same `CFBundleVersion` twice, and App Store Connect rejects the second.
 
 ### Store icon
 
@@ -104,7 +104,7 @@ App Store Connect rejects a reused `CFBundleVersion`, so it climbs every upload.
 
 ### Build machine
 
-MAS builds run locally on the mini, the designated build machine. It holds everything the signed flow needs: both distribution certs plus Apple's WWDR G3 intermediate in the login keychain, the provisioning profile at `src-tauri/embedded.provisionprofile`, and the App Store Connect API key at `~/Documents/capy-mas/AuthKey_*.p8`.
+MAS builds run locally on the designated build machine (not CI). It holds everything the signed flow needs: both distribution certs plus Apple's WWDR intermediate in the login keychain, the provisioning profile at `src-tauri/embedded.provisionprofile`, and the App Store Connect API key under `~/Documents/capy-mas/`.
 
 The credentials above (identifiers plus the `.p8` path — not the certs' private keys) are read automatically from `~/Documents/capy-mas/mas.env` by `mas-common.mjs`, so `npm run release:mas && npm run upload:mas` runs with no manual `export`s. Override the file location with `CAPY_MAS_ENV`; anything already set in the environment takes precedence, so CI and one-off overrides are untouched.
 
