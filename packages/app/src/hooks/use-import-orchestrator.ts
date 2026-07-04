@@ -3,9 +3,9 @@ import {
   ImportOrchestrator,
   FileStagingStore,
   buildImportSystemPrompt,
-  canImport,
   canReadPdf,
   createStructuredImportSession,
+  importReady,
   type BudgetDataProvider,
 } from "@capybudget/intelligence";
 import { AnthropicSession, OpenAiSession } from "@capybudget/intelligence/adapters";
@@ -67,8 +67,8 @@ export function useImportOrchestrator(budgetPath: string) {
   const apply = useImportStore((s) => s.apply);
   const beginRun = useImportStore((s) => s.beginRun);
 
-  const supported = canImport(config.provider);
   const pdfSupported = canReadPdf(config.provider);
+  const canStart = importReady(config);
 
   const staging = useMemo(
     () => new FileStagingStore(tauriFileAdapter, budgetPath),
@@ -181,5 +181,5 @@ export function useImportOrchestrator(budgetPath: string) {
     await orchestrator.stop();
   }, []);
 
-  return { supported, pdfSupported, start, enrich, stop, cancel, staging };
+  return { canStart, pdfSupported, provider: config.provider, start, enrich, stop, cancel, staging };
 }

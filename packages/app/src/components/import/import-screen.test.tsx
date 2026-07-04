@@ -6,14 +6,14 @@ import { makeImportTransaction } from "@capybudget/core/test-factories";
 // bar, and preview subtrees are stubbed down to markers.
 vi.mock("./import-drop-zone", () => ({
   ImportDropZone: () => <div data-testid="drop-zone" />,
-  ProviderUnsupportedBanner: () => <div data-testid="unsupported-banner" />,
 }));
 vi.mock("./import-progress", () => ({ ImportProgress: () => <div data-testid="progress" /> }));
 vi.mock("./import-preview", () => ({ ImportPreview: () => <div data-testid="preview" /> }));
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    supported: true,
+    canStart: true,
+    provider: "anthropic" as string | null,
     start: vi.fn(),
     staging: {
       readTransactions: vi.fn(),
@@ -28,7 +28,8 @@ const { mocks } = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/hooks/use-import-orchestrator", () => ({
   useImportOrchestrator: () => ({
-    supported: mocks.supported,
+    canStart: mocks.canStart,
+    provider: mocks.provider,
     pdfSupported: true,
     start: mocks.start,
     enrich: vi.fn(() => true),
@@ -51,7 +52,8 @@ import { useImportStore } from "@/stores/import-store";
 beforeEach(() => {
   useImportStore.getState().reset();
   useImportStore.getState().setHasImportData(false);
-  mocks.supported = true;
+  mocks.canStart = true;
+  mocks.provider = "anthropic";
   mocks.start.mockReset().mockReturnValue(true);
   mocks.listSourceFiles.mockReset().mockResolvedValue([]);
   mocks.staging.readTransactions.mockReset().mockResolvedValue(null);
@@ -130,20 +132,11 @@ describe("ImportScreen — checkStaging routing", () => {
     expect(useImportStore.getState().hasImportData).toBe(false);
   });
 
-  it("shows the set-up-AI nudge instead of the drop zone when no provider is configured", async () => {
-    mocks.supported = false;
-    renderScreen();
-
-    expect(await screen.findByTestId("unsupported-banner")).toBeInTheDocument();
-    expect(screen.queryByTestId("drop-zone")).toBeNull();
-  });
-
   // Regression: a rejecting staging probe must settle the screen, never wedge the spinner.
-  it("settles to the nudge when the staging probe is denied (MAS sandbox)", async () => {
-    mocks.supported = false;
+  it("settles to file-attach when the staging probe is denied (MAS sandbox)", async () => {
     mocks.staging.readTransactions.mockRejectedValue(new Error("forbidden path"));
     renderScreen();
 
-    expect(await screen.findByTestId("unsupported-banner")).toBeInTheDocument();
+    expect(await screen.findByTestId("drop-zone")).toBeInTheDocument();
   });
 });
