@@ -40,9 +40,12 @@ The stable download URLs (used by the website and the auto-updater) always resol
 | `APPLE_CERTIFICATE` | Base64-encoded Developer ID `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | Password for the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
-| `APPLE_ID` | Apple ID used for notarization |
-| `APPLE_PASSWORD` | App-specific password (appleid.apple.com) |
+| `APPLE_API_ISSUER` | App Store Connect API issuer UUID (notarization) |
+| `APPLE_API_KEY_ID` | ASC API key ID (notarization) |
+| `APPLE_API_KEY_P8_BASE64` | Base64-encoded ASC API `.p8` key (notarization) |
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
+
+Notarization authenticates with an **App Store Connect API key**, not an Apple ID + app-specific password: an API key survives Apple ID password changes, whereas changing the password silently revokes every app-specific password (which broke a release once). The `release.yml` macOS job decodes `APPLE_API_KEY_P8_BASE64` to a file and passes tauri-action `APPLE_API_ISSUER` / `APPLE_API_KEY` / `APPLE_API_KEY_PATH`. It's the same ASC API key the MAS pipeline uploads with (`~/Documents/capy-mas/`).
 
 ## Mac App Store
 
