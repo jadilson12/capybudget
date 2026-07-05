@@ -7,6 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CategorySelector } from "@/components/budget/category-selector";
@@ -41,6 +42,9 @@ interface ImportTableProps {
   transactions: ImportTransaction[];
   /** Whether a search query filtered `transactions` — picks the empty-state copy. */
   searchActive: boolean;
+  /** Whether read-validation dropped staged rows — an empty preview then means
+   *  "every row was unreadable," not "no data found," so the copy differs. */
+  droppedRows: boolean;
   sort: ImportSortConfig;
   onSortChange: (sort: ImportSortConfig) => void;
   selectedIds: Set<string>;
@@ -55,6 +59,10 @@ interface ImportTableProps {
   /** Opens the Map-accounts dialog (the ACCOUNT cell is its trigger). */
   onOpenAccountMapping: () => void;
   duplicateIds: Set<string>;
+  /** Cancels the whole import — surfaced as a link in the no-data empty states so
+   *  the escape hatch sits where the user is looking. Omitted for the search-miss
+   *  variant, which offers no link. */
+  onCancelImport?: () => void;
 }
 
 function defaultDirection(column: ImportSortColumn): "asc" | "desc" {
@@ -124,6 +132,7 @@ function SortableHeader({
 export function ImportTable({
   transactions,
   searchActive,
+  droppedRows,
   sort,
   onSortChange,
   selectedIds,
@@ -137,6 +146,7 @@ export function ImportTable({
   accountMapping,
   onOpenAccountMapping,
   duplicateIds,
+  onCancelImport,
 }: ImportTableProps) {
   const { t } = useTranslation(["import", "common"]);
   const { money, date } = useFormatters();
@@ -175,12 +185,24 @@ export function ImportTable({
   }, []);
 
   if (transactions.length === 0) {
+    const description = searchActive
+      ? t("table.noMatchesDescription")
+      : droppedRows
+        ? t("table.emptyDroppedDescription")
+        : t("table.emptyDescription");
     return (
       <EmptyState
         icon={<Inbox strokeWidth={1.5} />}
         title={searchActive ? t("table.noMatchesTitle") : t("table.emptyTitle")}
-        description={searchActive ? t("table.noMatchesDescription") : undefined}
+        description={description}
         className="py-24"
+        action={
+          !searchActive && onCancelImport ? (
+            <Button variant="link" size="sm" onClick={onCancelImport}>
+              {t("table.cancelImportLink")}
+            </Button>
+          ) : undefined
+        }
       />
     );
   }

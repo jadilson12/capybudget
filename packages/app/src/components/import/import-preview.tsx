@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +52,12 @@ interface ImportPreviewProps {
    *  still live until the clear succeeds, resurrect staging. Registered on mount,
    *  cleared (null) on unmount. */
   onRegisterDiscard: (discard: (() => void) | null) => void;
+  /** Reports the live selected-row count up to the screen, where the Cancel
+   *  control gates its confirmation on it — nothing selected skips the dialog. */
+  onSelectionChange: (count: number) => void;
+  /** Invokes the screen's cancel path; passed to the table's empty state as a
+   *  link so the escape hatch sits where the user is looking. */
+  onCancelImport: () => void;
   onMergeComplete: () => void;
 }
 
@@ -64,6 +70,8 @@ export function ImportPreview({
   onEnrich,
   onEnrichControl,
   onRegisterDiscard,
+  onSelectionChange,
+  onCancelImport,
   onMergeComplete,
 }: ImportPreviewProps) {
   const { t } = useTranslation(["import", "common"]);
@@ -171,6 +179,11 @@ export function ImportPreview({
   const selected = transactions.filter((t) => selectedIds.has(t.id));
   const selectedCount = selected.length;
   const totalCount = transactions.length;
+
+  useEffect(() => {
+    onSelectionChange(selectedCount);
+    return () => onSelectionChange(0);
+  }, [selectedCount, onSelectionChange]);
   // A row's native amount rolls up via its destination account's currency at
   // today's rate; rows landing on a fresh (yet-uncreated) account take the budget
   // default. Identity for a same-currency import, so a USD budget never moves.
@@ -361,6 +374,7 @@ export function ImportPreview({
         <ImportTable
           transactions={sorted}
           searchActive={search !== ""}
+          droppedRows={showSkippedNote}
           sort={sort}
           onSortChange={setSort}
           selectedIds={selectedIds}
@@ -374,6 +388,7 @@ export function ImportPreview({
           accountMapping={accountMapping}
           onOpenAccountMapping={() => setShowMappingDialog(true)}
           duplicateIds={duplicateIds}
+          onCancelImport={onCancelImport}
         />
       </div>
 

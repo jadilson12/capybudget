@@ -24,12 +24,15 @@ function renderTable(
     accountMapping?: Record<string, string>;
     onOpenAccountMapping?: () => void;
     searchActive?: boolean;
+    droppedRows?: boolean;
+    onCancelImport?: () => void;
   } = {},
 ) {
   return render(
     <ImportTable
       transactions={transactions}
       searchActive={opts.searchActive ?? false}
+      droppedRows={opts.droppedRows ?? false}
       sort={sort}
       onSortChange={vi.fn()}
       selectedIds={opts.selectedIds ?? new Set(transactions.map((t) => t.id))}
@@ -43,6 +46,7 @@ function renderTable(
       accountMapping={opts.accountMapping ?? {}}
       onOpenAccountMapping={opts.onOpenAccountMapping ?? vi.fn()}
       duplicateIds={opts.duplicateIds ?? new Set()}
+      onCancelImport={opts.onCancelImport}
     />,
   );
 }
@@ -226,10 +230,45 @@ describe("ImportTable — empty state", () => {
     expect(screen.getByText("Try adjusting your search.")).toBeInTheDocument();
   });
 
-  it("shows a neutral message when no rows loaded at all", () => {
+  it("says Capy found no data when nothing was staged", () => {
     renderTable([]);
 
     expect(screen.getByText("No transactions to import")).toBeInTheDocument();
+    expect(
+      screen.getByText("Capy couldn't find any transaction data in the attached files."),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Try adjusting your search.")).toBeNull();
+  });
+
+  it("drops the no-data claim when read-validation dropped every staged row", () => {
+    renderTable([], { droppedRows: true });
+
+    expect(screen.getByText("No transactions to import")).toBeInTheDocument();
+    expect(screen.getByText("None of the rows in the attached files could be read.")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't find any transaction data/)).toBeNull();
+  });
+
+  it("offers a Cancel-import link in the no-data empty state", async () => {
+    const user = userEvent.setup();
+    const onCancelImport = vi.fn();
+    renderTable([], { onCancelImport });
+
+    await user.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(onCancelImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the Cancel-import link in the all-dropped empty state too", async () => {
+    const user = userEvent.setup();
+    const onCancelImport = vi.fn();
+    renderTable([], { droppedRows: true, onCancelImport });
+
+    await user.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(onCancelImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the Cancel-import link when a search filtered the rows out", () => {
+    renderTable([], { searchActive: true, onCancelImport: vi.fn() });
+
+    expect(screen.queryByRole("button", { name: "Cancel import" })).toBeNull();
   });
 });
