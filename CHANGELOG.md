@@ -9,6 +9,10 @@ CHANGELOG PHILOSOPHY:
 - Resist the urge to be thorough here. Thoroughness goes in specs, not changelog.
 -->
 
+## Unreleased
+
+- **Import** - A cancelled or merged import no longer reappears when you relaunch the app or switch budgets.
+
 ## 1.5.0 — 2026-07-04
 
 - **Import** - PDF bank statements now import (and attach in chat) under OpenAI too, not just Anthropic.
