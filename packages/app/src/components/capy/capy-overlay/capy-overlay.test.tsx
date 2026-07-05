@@ -131,8 +131,11 @@ beforeEach(() => {
   _resetStoreForTests()
   _resetIntelligenceStoreForTests()
   _setStoreLoaderForTests(async () => ({
-    get: async () => null,
-    set: async () => {},
+    load: async () => null,
+    loadSecrets: async () => ({ anthropic: "", openai: "" }),
+    save: async () => {},
+    markGateSeen: async () => {},
+    clearGateSeen: async () => {},
   }))
   detectMock.mockReset()
   detectMock.mockResolvedValue(true)

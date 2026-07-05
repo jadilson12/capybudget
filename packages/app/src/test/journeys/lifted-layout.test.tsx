@@ -90,7 +90,13 @@ beforeEach(() => {
   createSessionMock.mockClear();
   _resetStoreForTests();
   _resetIntelligenceStoreForTests();
-  _setStoreLoaderForTests(async () => ({ get: async () => null, set: async () => {} }));
+  _setStoreLoaderForTests(async () => ({
+    load: async () => null,
+    loadSecrets: async () => ({ anthropic: "", openai: "" }),
+    save: async () => {},
+    markGateSeen: async () => {},
+    clearGateSeen: async () => {},
+  }));
   useAppStore.setState({
     recentBudgets: [
       { path: "/test-budget", name: "Test Budget", lastOpened: "2026-01-01T00:00:00.000Z" },
@@ -163,6 +169,31 @@ describe("Lifted BudgetLayout boundary", () => {
     await waitFor(() => expect(screen.getByText(ASSISTANT_REPLY)).toBeInTheDocument());
     expect(session.killSpy).not.toHaveBeenCalled();
     expect(createSessionMock).toHaveBeenCalledTimes(1);
+  }, TIMEOUT);
+
+  it("renders the keychain heads-up over the Settings route", async () => {
+    const { user } = await renderApp({ seed: { accounts: [], categories: [], transactions: [] } });
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "All Accounts" })).toBeInTheDocument();
+    });
+
+    // Into settings: the budget chrome (BudgetShell, where the dialog used to
+    // live) unmounts, but the layout persists.
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    });
+
+    // Opening the gate on this route must surface the dialog — it's mounted at
+    // the layout, so it renders over settings too. Regression: mounted only in
+    // BudgetShell, the gate would open with no dialog and ensureSecrets would
+    // hang on a promise that never resolves.
+    act(() => {
+      useIntelligenceStore.setState({ secretGateOpen: true });
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Unlock your AI key")).toBeInTheDocument(),
+    );
   }, TIMEOUT);
 
   it("tears the session down when the budget is closed", async () => {

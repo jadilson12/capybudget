@@ -2,7 +2,7 @@
 import { Fragment, useEffect, useState } from "react"
 import { useSearch } from "@tanstack/react-router"
 import { getTauriVersion, getVersion } from "@tauri-apps/api/app"
-import { Bug, Copy } from "lucide-react"
+import { Bug, Copy, RotateCcw } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useFormatLocale } from "@capybudget/i18n"
 import { PROVIDER_LABELS } from "@capybudget/intelligence"
@@ -23,12 +23,14 @@ const IN_TAURI = "__TAURI_INTERNALS__" in window
 export function DevSection() {
   const { path, name } = useSearch({ from: "/budget" })
   const config = useIntelligenceStore((s) => s.config)
+  const resetSecretGate = useIntelligenceStore((s) => s.resetSecretGate)
   const language = useFormatLocale()
   const { theme, resolvedTheme } = useTheme()
 
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [tauriVersion, setTauriVersion] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [gateReset, setGateReset] = useState(false)
   const [crash, setCrash] = useState(false)
 
   useEffect(() => {
@@ -46,6 +48,12 @@ export function DevSection() {
     const id = setTimeout(() => setCopied(false), 2000)
     return () => clearTimeout(id)
   }, [copied])
+
+  useEffect(() => {
+    if (!gateReset) return
+    const id = setTimeout(() => setGateReset(false), 2000)
+    return () => clearTimeout(id)
+  }, [gateReset])
 
   // Render-time throw — error boundaries only catch render errors, not event
   // handlers, so the click flips state and the throw happens on the next render.
@@ -88,6 +96,11 @@ export function DevSection() {
     )
   }
 
+  const handleResetGate = () => {
+    resetSecretGate()
+    setGateReset(true)
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -114,6 +127,10 @@ export function DevSection() {
           <Button variant="destructive" size="sm" onClick={() => setCrash(true)}>
             <Bug className="h-4 w-4" />
             Trigger error screen
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleResetGate}>
+            <RotateCcw className="h-4 w-4" />
+            {gateReset ? "Reset" : "Reset keychain heads-up"}
           </Button>
         </div>
       </CardContent>

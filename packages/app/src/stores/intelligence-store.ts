@@ -5,10 +5,14 @@
  *
  * Lifecycle:
  *   1. Initial state mirrors DEFAULT_INTELLIGENCE_CONFIG (provider null).
- *   2. `hydrate()` loads from disk on first call. First-run default is
- *      `null` — users explicitly pick a provider to enable AI features
- *      so they're never surprised by quota usage.
- *   3. Setters write through to disk; UI subscribers see the new value
+ *   2. `hydrate()` loads the plaintext config from disk on first call —
+ *      provider, models, and per-provider key-presence flags. It never
+ *      touches the OS keychain, so boot pops no credential prompt.
+ *   3. `ensureSecrets()` reads the keychain on demand — the first time a
+ *      secret's value is actually needed (Capy opened, import started,
+ *      Settings shows a key). The first-ever read is gated behind a
+ *      one-time heads-up so the OS prompt is never a surprise.
+ *   4. Setters write through to disk; UI subscribers see the new value
  *      synchronously.
  *
  * The loader is mockable: tests inject a stub via `_setStoreLoaderForTests`
@@ -25,15 +29,18 @@ import {
 import {
   createSecretAwareBackend,
   type ConfigStoreBackend,
+  type ProviderSecrets,
+  type SecretConfigBackend,
 } from "./secret-config"
 import { keychainEnabled, tauriKeychain } from "@/lib/keychain"
 
 const STORE_FILE = "intelligence-config.json"
 const STORE_KEY = "config"
+const GATE_SEEN_KEY = "secretGateSeen"
 
 // ── Persistence backend (mockable) ───────────────────────────────
 
-export type { ConfigStoreBackend } from "./secret-config"
+export type { SecretConfigBackend } from "./secret-config"
 
 async function tauriFileStore(): Promise<ConfigStoreBackend> {
   const store = await Store.load(STORE_FILE)
@@ -46,21 +53,32 @@ async function tauriFileStore(): Promise<ConfigStoreBackend> {
       await store.set(STORE_KEY, config)
       await store.save()
     },
+    async getGateSeen() {
+      return (await store.get<boolean>(GATE_SEEN_KEY)) ?? false
+    },
+    async setGateSeen() {
+      await store.set(GATE_SEEN_KEY, true)
+      await store.save()
+    },
+    async clearGateSeen() {
+      await store.set(GATE_SEEN_KEY, false)
+      await store.save()
+    },
   }
 }
 
 // The store file holds the config; provider API keys live in the OS keychain,
-// composed in here so consumers still see a whole config. See secret-config.ts.
-async function tauriBackend(): Promise<ConfigStoreBackend> {
+// read in on demand. See secret-config.ts.
+async function tauriBackend(): Promise<SecretConfigBackend> {
   const file = await tauriFileStore()
   return createSecretAwareBackend(file, keychainEnabled() ? tauriKeychain : null)
 }
 
-let backendLoader: () => Promise<ConfigStoreBackend> = tauriBackend
+let backendLoader: () => Promise<SecretConfigBackend> = tauriBackend
 
 /** Test-only: swap the persistence backend (no Tauri in unit tests). */
 export function _setStoreLoaderForTests(
-  loader: () => Promise<ConfigStoreBackend>,
+  loader: () => Promise<SecretConfigBackend>,
 ): void {
   backendLoader = loader
 }
@@ -75,9 +93,36 @@ export function _resetStoreForTests(): void {
 interface IntelligenceStore {
   config: IntelligenceConfig
   hydrated: boolean
+  /** Whether the keychain has been read this session (secrets merged into
+   *  `config`). Non-API providers count as loaded — there's nothing to read. */
+  secretsLoaded: boolean
+  /** Whether the one-time keychain heads-up has been shown (persisted). */
+  secretGateSeen: boolean
+  /** Whether the heads-up dialog is currently open. */
+  secretGateOpen: boolean
+  /** The last on-demand keychain read failed or was denied. Retryable — the key
+   *  is still known to be present; `ensureSecrets` can be re-run to recover. */
+  secretsError: boolean
 
-  /** Load config from disk. Idempotent — repeat calls are no-ops. */
+  /** Load the plaintext config from disk. Idempotent — repeat calls are
+   *  no-ops. Never touches the keychain. */
   hydrate(): Promise<void>
+
+  /** Ensure the provider secrets are merged into `config`, reading the keychain
+   *  once per session. The first-ever read shows the heads-up and waits for the
+   *  user to allow it; dismissing leaves secrets unloaded. Resolves when secrets
+   *  are in memory (or there were none to load). No-op for non-API providers. */
+  ensureSecrets(): Promise<void>
+
+  /** Heads-up "Allow": mark it seen and let the pending load proceed. */
+  confirmSecretGate(): void
+  /** Heads-up dismissed: close it without loading. */
+  dismissSecretGate(): void
+
+  /** Dev-only: clear the "heads-up seen" flag (persisted + in-memory) and drop
+   *  the loaded secrets, so the next on-demand load behaves like a fresh
+   *  install — heads-up shown, keychain re-read. No app restart needed. */
+  resetSecretGate(): void
 
   setProvider(p: IntelligenceProvider): void
   setAnthropicKey(k: string): void
@@ -100,22 +145,39 @@ function withDefaults(loaded: IntelligenceConfig): IntelligenceConfig {
   }
 }
 
-let backend: ConfigStoreBackend | null = null
-let hydratePromise: Promise<void> | null = null
+function mergeSecrets(
+  config: IntelligenceConfig,
+  secrets: ProviderSecrets,
+): IntelligenceConfig {
+  return {
+    ...config,
+    anthropic: { ...config.anthropic, apiKey: secrets.anthropic, keyPresent: Boolean(secrets.anthropic) },
+    openai: { ...config.openai, apiKey: secrets.openai, keyPresent: Boolean(secrets.openai) },
+  }
+}
 
-async function loadBackend(): Promise<ConfigStoreBackend> {
+let backend: SecretConfigBackend | null = null
+let hydratePromise: Promise<void> | null = null
+let secretsPromise: Promise<void> | null = null
+let gateResolve: ((allowed: boolean) => void) | null = null
+
+async function loadBackend(): Promise<SecretConfigBackend> {
   if (!backend) backend = await backendLoader()
   return backend
 }
 
 async function persist(config: IntelligenceConfig): Promise<void> {
   const b = await loadBackend()
-  await b.set(config)
+  await b.save(config)
 }
 
 export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
   config: { ...DEFAULT_INTELLIGENCE_CONFIG },
   hydrated: false,
+  secretsLoaded: false,
+  secretGateSeen: false,
+  secretGateOpen: false,
+  secretsError: false,
 
   async hydrate() {
     if (get().hydrated) return
@@ -123,19 +185,23 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
 
     hydratePromise = (async () => {
       const b = await loadBackend()
-      const loaded = await b.get()
+      const loaded = await b.load()
 
       // First-run: no config on disk yet. Default to null — users
       // explicitly pick a provider so they're never surprised by
-      // quota usage.
+      // quota usage. The seed write skips the keychain (no keys).
       if (!loaded) {
         const seeded: IntelligenceConfig = { ...DEFAULT_INTELLIGENCE_CONFIG }
-        await b.set(seeded)
+        await b.save(seeded)
         set({ config: seeded, hydrated: true })
         return
       }
 
-      set({ config: withDefaults(loaded), hydrated: true })
+      set({
+        config: withDefaults(loaded.config),
+        hydrated: true,
+        secretGateSeen: loaded.gateSeen,
+      })
     })()
 
     try {
@@ -143,6 +209,65 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
     } finally {
       hydratePromise = null
     }
+  },
+
+  async ensureSecrets() {
+    if (get().secretsLoaded) return
+    const provider = get().config.provider
+    if (provider !== "anthropic" && provider !== "openai") {
+      set({ secretsLoaded: true })
+      return
+    }
+    if (!secretsPromise) {
+      secretsPromise = (async () => {
+        if (!get().secretGateSeen) {
+          const allowed = await new Promise<boolean>((resolve) => {
+            gateResolve = resolve
+            set({ secretGateOpen: true })
+          })
+          if (!allowed) return
+        }
+        const b = await loadBackend()
+        let secrets: ProviderSecrets
+        try {
+          secrets = await b.loadSecrets()
+        } catch {
+          // Read failed or was denied. Don't mark loaded or flip presence false
+          // (that would mis-report a configured key as absent and never retry) —
+          // surface a retryable error; the next `ensureSecrets` re-reads.
+          set({ secretsError: true })
+          return
+        }
+        set((s) => {
+          // A key set while this read was in flight (e.g. the user typed one in
+          // Settings) is authoritative — its setter already flipped
+          // `secretsLoaded`, so drop this now-stale keychain result.
+          if (s.secretsLoaded) return {}
+          return { config: mergeSecrets(s.config, secrets), secretsLoaded: true, secretsError: false }
+        })
+      })().finally(() => {
+        secretsPromise = null
+      })
+    }
+    return secretsPromise
+  },
+
+  confirmSecretGate() {
+    set({ secretGateOpen: false, secretGateSeen: true })
+    gateResolve?.(true)
+    gateResolve = null
+    void loadBackend().then((b) => b.markGateSeen())
+  },
+
+  dismissSecretGate() {
+    set({ secretGateOpen: false })
+    gateResolve?.(false)
+    gateResolve = null
+  },
+
+  resetSecretGate() {
+    set({ secretGateSeen: false, secretsLoaded: false, secretsError: false })
+    void loadBackend().then((b) => b.clearGateSeen())
   },
 
   setProvider(provider) {
@@ -153,8 +278,12 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
 
   setAnthropicKey(apiKey) {
     const cur = get().config
-    const next = { ...cur, anthropic: { ...cur.anthropic, apiKey } }
-    set({ config: next })
+    const next = { ...cur, anthropic: { ...cur.anthropic, apiKey, keyPresent: Boolean(apiKey) } }
+    // The user-entered value is authoritative now — flip `secretsLoaded` so an
+    // in-flight `ensureSecrets` merge skips (see its guard) rather than
+    // overwriting this with a stale keychain read. A typed key also clears any
+    // prior read failure — there's nothing left to retry.
+    set({ config: next, secretsLoaded: true, secretsError: false })
     void persist(next)
   },
 
@@ -167,8 +296,8 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
 
   setOpenAiKey(apiKey) {
     const cur = get().config
-    const next = { ...cur, openai: { ...cur.openai, apiKey } }
-    set({ config: next })
+    const next = { ...cur, openai: { ...cur.openai, apiKey, keyPresent: Boolean(apiKey) } }
+    set({ config: next, secretsLoaded: true, secretsError: false })
     void persist(next)
   },
 
@@ -191,8 +320,14 @@ export const useIntelligenceStore = create<IntelligenceStore>((set, get) => ({
 export function _resetIntelligenceStoreForTests(): void {
   backend = null
   hydratePromise = null
+  secretsPromise = null
+  gateResolve = null
   useIntelligenceStore.setState({
     config: { ...DEFAULT_INTELLIGENCE_CONFIG },
     hydrated: false,
+    secretsLoaded: false,
+    secretGateSeen: false,
+    secretGateOpen: false,
+    secretsError: false,
   })
 }

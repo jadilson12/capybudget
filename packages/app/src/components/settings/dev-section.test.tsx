@@ -13,6 +13,10 @@ vi.mock("@tauri-apps/api/app", () => ({
 }))
 
 import { DevSection } from "./dev-section"
+import {
+  useIntelligenceStore,
+  _resetIntelligenceStoreForTests,
+} from "@/stores/intelligence-store"
 
 class TestBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null }
@@ -30,6 +34,7 @@ class TestBoundary extends Component<{ children: ReactNode }, { error: Error | n
 
 afterEach(() => {
   cleanup()
+  _resetIntelligenceStoreForTests()
 })
 
 describe("DevSection", () => {
@@ -52,5 +57,16 @@ describe("DevSection", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/forced crash/i)
 
     errorSpy.mockRestore()
+  })
+
+  it("resets the keychain heads-up seen flag", async () => {
+    const user = userEvent.setup()
+    const resetSpy = vi.fn()
+    useIntelligenceStore.setState({ resetSecretGate: resetSpy })
+
+    render(<DevSection />)
+    await user.click(screen.getByRole("button", { name: /reset keychain heads-up/i }))
+
+    expect(resetSpy).toHaveBeenCalledTimes(1)
   })
 })
