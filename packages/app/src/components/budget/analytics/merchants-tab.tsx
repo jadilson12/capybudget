@@ -60,6 +60,48 @@ function MerchantTooltipContent({
   );
 }
 
+// ── Axis tick ──
+
+/** Merchant names come from bank exports and are long and free-form
+ *  ("Pix - Enviado 06/08 20:19 EQUATORIAL GOIAS DI"). Recharts' default
+ *  category tick wraps text to the axis width, and with 15 bars the wrapped
+ *  lines collide with their neighbours. Render a single truncated line
+ *  instead — the full name stays available in the tooltip, in the native
+ *  hover title, and in the ranked list below the chart. */
+const AXIS_WIDTH = 150;
+const MAX_TICK_CHARS = 22;
+
+function truncateTickLabel(value: string) {
+  return value.length > MAX_TICK_CHARS
+    ? `${value.slice(0, MAX_TICK_CHARS - 1).trimEnd()}…`
+    : value;
+}
+
+function MerchantAxisTick({
+  x,
+  y,
+  payload,
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value?: string };
+}) {
+  const value = String(payload?.value ?? "");
+  return (
+    <text
+      x={x}
+      y={y}
+      dy={4}
+      textAnchor="end"
+      fontSize={12}
+      className="fill-muted-foreground"
+    >
+      {truncateTickLabel(value)}
+      <title>{value}</title>
+    </text>
+  );
+}
+
 // ── Main ──
 
 interface MerchantsTabProps {
@@ -135,9 +177,10 @@ export function MerchantsTab({
           <YAxis
             type="category"
             dataKey="displayMerchant"
-            tick={{ fontSize: 12 }}
+            tick={<MerchantAxisTick />}
+            interval={0}
             className="text-muted-foreground"
-            width={120}
+            width={AXIS_WIDTH}
           />
           <Tooltip content={<MerchantTooltipContent />} />
           <Bar
