@@ -35,6 +35,17 @@
     "title": "Idioma",
     "description": "Idioma de exibição do aplicativo."
   },
+  "fontSize": {
+    "title": "Tamanho da fonte",
+    "description": "Tamanho do texto em todo o aplicativo.",
+    "hint": "Escala a interface inteira, não só o texto.",
+    "options": {
+      "small": "Pequeno",
+      "default": "Padrão",
+      "large": "Grande",
+      "larger": "Muito grande"
+    }
+  },
   "currency": {
     "title": "Moeda",
     "description": "Como os valores são exibidos.",
