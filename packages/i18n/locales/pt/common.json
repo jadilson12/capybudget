@@ -37,7 +37,8 @@
     "ocean": "Oceano",
     "forest": "Floresta",
     "rose": "Rosa",
-    "slate": "Ardósia"
+    "slate": "Ardósia",
+    "midnight": "Meia-noite"
   },
   "update": {
     "available": "Capy {{version}} disponível",

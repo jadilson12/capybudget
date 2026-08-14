@@ -23,6 +23,7 @@ const LABEL_KEY = {
   forest: "colorTheme.forest",
   rose: "colorTheme.rose",
   slate: "colorTheme.slate",
+  midnight: "colorTheme.midnight",
 } satisfies Record<ColorTheme, CommonKey>;
 
 export function ColorThemeSwitcher() {

@@ -37,7 +37,8 @@
     "ocean": "Ocean",
     "forest": "Forest",
     "rose": "Rose",
-    "slate": "Slate"
+    "slate": "Slate",
+    "midnight": "Midnight"
   },
   "update": {
     "available": "Capy {{version}} available",
