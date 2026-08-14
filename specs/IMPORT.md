@@ -2,7 +2,7 @@
 
 Drop a file, code normalizes and grounds it, the model categorizes the ambiguous remainder, you review and merge. The app is fully functional without import — it's additive.
 
-Import requires the Anthropic or OpenAI provider. Both run the structured model calls the pipeline needs; the Claude Code CLI structured-call path is not available, so the import surface is gated off when the CLI provider (or no provider) is selected.
+Import requires the Anthropic, OpenAI, or Ollama provider. All three run the structured model calls the pipeline needs (Ollama through its OpenAI-compatible `/v1` shim); the Claude Code CLI structured-call path is not available, so the import surface is gated off when the CLI provider (or no provider) is selected. Ollama can't read PDFs — statements reach it as CSV/OFX or not at all.
 
 ## Architecture: code orchestrates, the model is a stateless function
 
