@@ -32,7 +32,7 @@ describe("FontSizeSection", () => {
     render(<Harness />)
 
     await user.click(screen.getByRole("combobox"))
-    await user.click(screen.getByRole("option", { name: "Large" }))
+    await user.click(await screen.findByRole("option", { name: "Large" }))
 
     expect(useAppStore.getState().fontScale).toBe("large")
     expect(document.documentElement.style.fontSize).toBe("112.5%")
