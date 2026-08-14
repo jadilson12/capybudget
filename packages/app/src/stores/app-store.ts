@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { RecentBudget } from "@capybudget/core";
 import type { SortConfig } from "@/lib/filter-transactions";
+import { DEFAULT_FONT_SCALE, type FontScale } from "@/lib/font-scales";
 
 const DEFAULT_SORT: SortConfig = { column: "date", direction: "desc" };
 
@@ -13,6 +14,9 @@ interface AppState {
 
   launchBudgetPath: string | null;
   setLaunchBudgetPath: (path: string | null) => void;
+
+  fontScale: FontScale;
+  setFontScale: (scale: FontScale) => void;
 
   sortPreferences: Record<string, SortConfig>;
   setSortPreference: (viewKey: string, sort: SortConfig) => void;
@@ -55,6 +59,10 @@ export const useAppStore = create<AppState>()(
 
       setLaunchBudgetPath: (path) => set({ launchBudgetPath: path }),
 
+      fontScale: DEFAULT_FONT_SCALE,
+
+      setFontScale: (scale) => set({ fontScale: scale }),
+
       sortPreferences: {},
 
       setSortPreference: (viewKey, sort) =>
@@ -70,6 +78,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         recentBudgets: state.recentBudgets,
         launchBudgetPath: state.launchBudgetPath,
+        fontScale: state.fontScale,
         sortPreferences: state.sortPreferences,
       }),
     },

@@ -4,6 +4,7 @@ export const COLOR_THEMES = {
   forest: { swatch: "oklch(0.52 0.14 152)" },
   rose: { swatch: "oklch(0.58 0.14 350)" },
   slate: { swatch: "oklch(0.50 0.03 260)" },
+  midnight: { swatch: "oklch(0.16 0.012 250)" },
 } as const;
 
 export type ColorTheme = keyof typeof COLOR_THEMES;

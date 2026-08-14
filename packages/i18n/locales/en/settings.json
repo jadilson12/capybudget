@@ -35,6 +35,17 @@
     "title": "Language",
     "description": "Display language for the app."
   },
+  "fontSize": {
+    "title": "Font size",
+    "description": "Text size across the app.",
+    "hint": "Scales the whole interface, not only the text.",
+    "options": {
+      "small": "Small",
+      "default": "Default",
+      "large": "Large",
+      "larger": "Larger"
+    }
+  },
   "currency": {
     "title": "Currency",
     "description": "How amounts are displayed.",

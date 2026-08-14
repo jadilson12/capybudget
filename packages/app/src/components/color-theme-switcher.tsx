@@ -23,6 +23,7 @@ const LABEL_KEY = {
   forest: "colorTheme.forest",
   rose: "colorTheme.rose",
   slate: "colorTheme.slate",
+  midnight: "colorTheme.midnight",
 } satisfies Record<ColorTheme, CommonKey>;
 
 export function ColorThemeSwitcher() {
@@ -38,7 +39,10 @@ export function ColorThemeSwitcher() {
       >
         <Palette className="h-4 w-4" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      {/* The trigger is a 32px icon button, so the default w-(--anchor-width)
+          leaves the menu at its min-w-32 floor and wraps longer labels
+          ("Meia-noite", "Medianoche"). Let it size to its own content. */}
+      <DropdownMenuContent align="end" className="w-auto whitespace-nowrap">
         <DropdownMenuRadioGroup
           value={colorTheme}
           onValueChange={(v) => setColorTheme(v as ColorTheme)}

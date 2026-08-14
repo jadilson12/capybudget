@@ -67,7 +67,10 @@ export function NavigationRail({
   return (
     <>
       {/* Desktop: vertical rail */}
-      <nav className="hidden md:flex w-16 flex-col items-center border-r border-sidebar-border bg-sidebar pt-3 gap-1 shrink-0">
+      {/* w-20, not w-16: at w-16 the longest labels ("Orçamento", "Importar")
+          are wider than the 48px item pill, so the text spilled past the active
+          background and ran into the rail's edges. */}
+      <nav className="hidden md:flex w-20 flex-col items-center border-r border-sidebar-border bg-sidebar pt-3 gap-1 shrink-0">
         <NavItem variant="rail" to="/budget" search={search} active={isAccounts} icon={Receipt} label={t("nav.accounts")} hint="1" />
         <NavItem variant="rail" to="/budget/categories" search={budgetSearch} active={isBudget} icon={PieChart} label={t("nav.budget")} hint="2" />
         <NavItem variant="rail" to="/budget/import" search={search} active={isImport} icon={FileUp} label={t("nav.import")} indicator={hasImportData} hint="3" />
@@ -94,7 +97,7 @@ export function NavigationRail({
 
 const variantStyles = {
   rail: {
-    link: "w-12 rounded-lg px-1 py-2",
+    link: "w-16 rounded-lg px-1 py-2",
     active: "bg-sidebar-accent text-sidebar-accent-foreground",
     inactive: "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
     iconActive: "text-brand",

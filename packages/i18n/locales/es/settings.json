@@ -35,6 +35,17 @@
     "title": "Idioma",
     "description": "Idioma de la interfaz de la app."
   },
+  "fontSize": {
+    "title": "Tamaño de fuente",
+    "description": "Tamaño del texto en toda la app.",
+    "hint": "Escala toda la interfaz, no solo el texto.",
+    "options": {
+      "small": "Pequeño",
+      "default": "Predeterminado",
+      "large": "Grande",
+      "larger": "Muy grande"
+    }
+  },
   "currency": {
     "title": "Moneda",
     "description": "Cómo se muestran los importes.",

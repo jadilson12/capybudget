@@ -6,6 +6,7 @@ import type { SettingsKey } from "@/lib/i18n-keys"
 import { Button } from "@/components/ui/button"
 import { GeneralSection } from "./general-section"
 import { LanguageSection } from "./language-section"
+import { FontSizeSection } from "./font-size-section"
 import { CurrencySection } from "./currency-section"
 import { ProviderSection } from "./provider-section"
 import { ChatInstructionsSection } from "./chat-instructions-section"
@@ -143,6 +144,7 @@ export function SettingsScreen() {
             <>
               <GeneralSection budgetPath={path} />
               <LanguageSection />
+              <FontSizeSection />
               <CurrencySection budgetPath={path} />
             </>
           )}

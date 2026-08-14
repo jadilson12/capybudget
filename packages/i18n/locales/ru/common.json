@@ -37,7 +37,8 @@
     "ocean": "Океан",
     "forest": "Лес",
     "rose": "Роза",
-    "slate": "Сланец"
+    "slate": "Сланец",
+    "midnight": "Полночь"
   },
   "update": {
     "available": "Доступна Капи {{version}}",
